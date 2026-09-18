@@ -69,6 +69,12 @@ const fmtNum = (v, d = 2) =>
 /* ---------------------------------------------------------------- worker */
 
 function avviaWorker() {
+  // nella versione a file unico (apertura con doppio clic) i worker non sono
+  // disponibili: si elabora direttamente nella pagina
+  if (globalThis.__VISUALIZZATORE_FILE_UNICO) {
+    worker = null;
+    return;
+  }
   try {
     worker = new Worker(new URL('../worker/stepWorker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (ev) => gestisciMessaggio(ev.data);

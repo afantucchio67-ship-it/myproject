@@ -9,6 +9,16 @@ Funziona **interamente nel browser**: nessun caricamento su server, nessuna
 dipendenza esterna. Parser STEP, tassellatore BREP e renderer WebGL sono scritti
 da zero in questo repository.
 
+## Due modi per usarlo
+
+**A) File unico, senza installare nulla** — `dist/visualizzatore-step.html`:
+scaricalo e aprilo con un doppio clic, poi trascina dentro il file `.stp`.
+Contiene già tutto (HTML, CSS e codice) e funziona anche senza rete. Si
+rigenera con `node build.mjs`.
+
+**B) Con il server locale** (consigliato per file grandi: la lettura avviene
+in un web worker e l'interfaccia resta sempre reattiva):
+
 ```
 node server.mjs          # avvia su http://localhost:8080
 ```
@@ -83,6 +93,7 @@ src/viewer/             matrici, camera orbitale, renderer WebGL, selezione a ra
 src/worker/             lettura e tassellazione in un web worker (interfaccia sempre reattiva)
 src/ui/                 pannelli dati, esportazioni, applicazione
 bin/step-report.mjs     report da riga di comando
+build.mjs               genera la versione a file unico in dist/
 test/                   test automatici con geometrie di riferimento
 ```
 
