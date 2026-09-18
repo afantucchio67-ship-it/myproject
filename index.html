@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="it" data-tema="scuro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualizzatore STEP — geometria e dati</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231d2027'/%3E%3Cpath d='M16 4 27 10v12L16 28 5 22V10z' fill='none' stroke='%234c9aff' stroke-width='2'/%3E%3Cpath d='M5 10l11 6 11-6M16 16v12' fill='none' stroke='%234c9aff' stroke-width='1.4' opacity='.75'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="barra-alta">
+  <div class="marchio">Visualizzatore <strong>STEP</strong></div>
+  <button id="bottone-apri" class="principale">Apri file…</button>
+  <input id="file-input" type="file" accept=".stp,.step,.STP,.STEP,.p21,.ifc" hidden>
+  <span id="nome-file" class="nome-file">nessun file</span>
+
+  <div class="gruppo">
+    <label>vista</label>
+    <button data-vista="iso" title="isometrica (0)">iso</button>
+    <button data-vista="fronte" title="fronte (1)">fr</button>
+    <button data-vista="retro" title="retro (2)">re</button>
+    <button data-vista="sinistra" title="sinistra (3)">sx</button>
+    <button data-vista="destra" title="destra (4)">dx</button>
+    <button data-vista="alto" title="alto (5)">su</button>
+    <button data-vista="basso" title="basso (6)">giù</button>
+    <button id="bottone-fit" title="inquadra tutto (f)">fit</button>
+  </div>
+
+  <div class="gruppo">
+    <label for="modo-vista">modo</label>
+    <select id="modo-vista">
+      <option value="solido-spigoli" selected>solido + spigoli</option>
+      <option value="solido">solido</option>
+      <option value="wireframe">wireframe</option>
+    </select>
+    <select id="proiezione" title="tipo di proiezione">
+      <option value="prospettiva" selected>prospettiva</option>
+      <option value="ortogonale">ortogonale</option>
+    </select>
+  </div>
+
+  <div class="gruppo">
+    <label for="opacita">trasparenza</label>
+    <input id="opacita" type="range" min="0.15" max="1" step="0.05" value="1">
+  </div>
+
+  <div class="gruppo">
+    <label><input id="sezione-attiva" type="checkbox"> sezione</label>
+    <select id="sezione-asse">
+      <option value="x">X</option>
+      <option value="y">Y</option>
+      <option value="z" selected>Z</option>
+    </select>
+    <input id="sezione-posizione" type="range" min="-1" max="1" step="0.005" value="0">
+  </div>
+
+  <div class="gruppo">
+    <label><input id="mostra-assi" type="checkbox" checked> assi</label>
+    <label><input id="mostra-bbox" type="checkbox"> ingombro</label>
+    <label><input id="misura-attiva" type="checkbox"> misura (m)</label>
+  </div>
+
+  <div class="gruppo">
+    <label for="tolleranza">qualità</label>
+    <select id="tolleranza" title="tolleranza di tassellazione (mm)">
+      <option value="0.5">bassa (0,5 mm)</option>
+      <option value="0.1" selected>media (0,1 mm)</option>
+      <option value="0.03">alta (0,03 mm)</option>
+      <option value="0.01">massima (0,01 mm)</option>
+    </select>
+  </div>
+
+  <div class="gruppo">
+    <select id="esporta" title="esporta">
+      <option value="" selected>esporta…</option>
+      <option value="json">report JSON</option>
+      <option value="csv-parti">CSV parti</option>
+      <option value="csv-facce">CSV facce</option>
+      <option value="csv-entita">CSV entità</option>
+      <option value="stl">mesh STL</option>
+      <option value="obj">mesh OBJ</option>
+      <option value="png">immagine PNG</option>
+    </select>
+    <select id="tema" title="tema">
+      <option value="scuro" selected>scuro</option>
+      <option value="chiaro">chiaro</option>
+    </select>
+  </div>
+</header>
+
+<main>
+  <aside class="laterale">
+    <nav class="schede">
+      <button class="scheda attiva" data-scheda="struttura">Struttura</button>
+      <button class="scheda" data-scheda="dati">Dati</button>
+      <button class="scheda" data-scheda="geometria">Geometria</button>
+      <button class="scheda" data-scheda="entita">Entità</button>
+      <button class="scheda" data-scheda="diagnostica">Diagnostica</button>
+    </nav>
+    <div id="pannello" class="pannello"></div>
+  </aside>
+
+  <section class="area-vista">
+    <canvas id="vista"></canvas>
+    <div id="misura-info" class="misura-info" hidden></div>
+    <div class="dettaglio-box">
+      <h4>Selezione</h4>
+      <div id="dettaglio"></div>
+    </div>
+    <div class="aiuto">
+      trascina = ruota · maiusc/destro = sposta · rotella = zoom · clic = interroga faccia
+    </div>
+  </section>
+</main>
+
+<footer class="barra-stato">
+  <span id="stato-messaggio" class="stato-messaggio">avvio…</span>
+  <span id="barra-stato-dati" class="dati"></span>
+  <div id="barra-progresso" class="progresso" hidden><div class="riempimento"></div></div>
+</footer>
+
+<script type="module">
+  import { avvia } from './src/ui/app.js';
+  avvia();
+</script>
+</body>
+</html>
