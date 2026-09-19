@@ -694,7 +694,7 @@ function tessellateBand(surf, rings, tol, flip, mesh, faceId) {
       vs.push(v);
     }
   }
-  let v0 = Math.min(...vs);
+  const v0 = Math.min(...vs);
   let v1 = Math.max(...vs);
   if (!(v1 > v0)) {
     v1 = v0 + 1e-6;
@@ -811,7 +811,7 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
     }
     const outer = projected[outerIdx];
     const holes = projected.filter((_, i) => i !== outerIdx);
-    let outerUV = outer.uv.slice();
+    const outerUV = outer.uv.slice();
     if (ringArea(outerUV) < 0) outerUV.reverse();
     const holeUVs = holes.map((h) => {
       const uv = h.uv.slice();
