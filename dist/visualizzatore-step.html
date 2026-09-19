@@ -1011,6 +1011,7 @@ function caricaModello(model, opts = {}) {
     renderer.selezione = -1;
     renderer.parteSelezionata = -1;
     renderer.hover = -1;
+    renderer.hoverParte = -1;
     renderer.misura.punti = [];
     stato.ricercaEntita = '';
     stato.totaleRisultati = 0;
@@ -2227,7 +2228,8 @@ void main() {
   vec3 base = uColor;
   if (abs(vFaceId - uSelectedFace) < 0.5) base = mix(base, vec3(1.0, 0.62, 0.16), 0.8);
   else if (abs(vFaceId - uHoverFace) < 0.5) base = mix(base, vec3(0.45, 0.85, 1.0), 0.6);
-  else if (uSelectedPart > 0.5) base = mix(base, vec3(1.0, 0.85, 0.55), 0.35);
+  else if (uSelectedPart > 0.75) base = mix(base, vec3(1.0, 0.85, 0.55), 0.35);   // parte selezionata
+  else if (uSelectedPart > 0.25) base = mix(base, vec3(0.6, 0.85, 1.0), 0.3);     // parte sotto il puntatore (tabella)
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0) * 0.12;
   vec3 col = base * (0.30 + 0.70 * diff) + vec3(spec) + vec3(rim);
   gl_FragColor = vec4(col, uOpacity);
@@ -2360,6 +2362,7 @@ class Renderer {
     this.opacita = 1;
     this.selezione = -1;       // id faccia selezionata
     this.parteSelezionata = -1;
+    this.hoverParte = -1;      // parte evidenziata dal passaggio sulle tabelle
     this.hover = -1;
     this.esplosione = 0;
     this.clip = { attivo: false, normale: [0, 0, 1], offset: 0 };
@@ -2642,7 +2645,7 @@ class Renderer {
         gl.uniformMatrix4fv(u.uModel, false, p.modelF32);
         gl.uniformMatrix3fv(u.uNormalMat, false, p.normalF32);
         gl.uniform3fv(u.uColor, p.coloreF32);
-        gl.uniform1f(u.uSelectedPart, i === this.parteSelezionata ? 1 : 0);
+        gl.uniform1f(u.uSelectedPart, i === this.parteSelezionata ? 1 : i === this.hoverParte ? 0.5 : 0);
         bindAttr(gl, a.aPos, p.posBuf, 3);
         bindAttr(gl, a.aNormal, p.normBuf, 3);
         bindAttr(gl, a.aFaceId, p.faceBuf, 1);
@@ -5745,6 +5748,54 @@ function basisDerivatives(span, u, degree, knots, nd) {
   return ders;
 }
 
+/**
+ * Funzioni di base B-spline in `out` (lunghezza degree+1), senza allocare:
+ * algoritmo A2.2 di The NURBS Book. `left`/`right` sono buffer di lavoro.
+ */
+function basisFunctions(span, u, degree, knots, out, left, right) {
+  out[0] = 1;
+  for (let j = 1; j <= degree; j++) {
+    left[j] = u - knots[span + 1 - j];
+    right[j] = knots[span + j] - u;
+    let saved = 0;
+    for (let r = 0; r < j; r++) {
+      const den = right[r + 1] + left[j - r];
+      const temp = den === 0 ? 0 : out[r] / den;
+      out[r] = saved + right[r + 1] * temp;
+      saved = left[j - r] * temp;
+    }
+    out[j] = saved;
+  }
+  return out;
+}
+
+/**
+ * Funzioni di base e derivate prime in `N` e `D` (lunghezza degree+1),
+ * senza allocare: le derivate si ottengono dalle basi di grado degree-1.
+ */
+function basisAndFirstDerivative(span, u, degree, knots, N, D, left, right, scratch) {
+  if (degree === 0) {
+    N[0] = 1;
+    D[0] = 0;
+    return;
+  }
+  // basi di grado p-1 (in scratch) -> derivate; poi basi di grado p
+  basisFunctions(span, u, degree - 1, knots, scratch, left, right);
+  for (let j = 0; j <= degree; j++) {
+    let d = 0;
+    if (j > 0) {
+      const den = knots[span + j] - knots[span + j - degree];
+      if (den !== 0) d += (degree * scratch[j - 1]) / den;
+    }
+    if (j < degree) {
+      const den = knots[span + j + 1] - knots[span + j + 1 - degree];
+      if (den !== 0) d -= (degree * scratch[j]) / den;
+    }
+    D[j] = d;
+  }
+  basisFunctions(span, u, degree, knots, N, left, right);
+}
+
 /** Espande (multiplicita', valori) nel vettore dei nodi completo. */
 function expandKnots(mults, values) {
   const out = [];
@@ -5839,6 +5890,29 @@ function buildCurve(file, ref) {
     if (ratPart) weights = (ratPart[0] || []).map(Number);
     const n = pts.length - 1;
     const domain = [knots[degree], knots[n + 1]];
+    const Nb = new Float64Array(degree + 1);
+    const leftB = new Float64Array(degree + 2);
+    const rightB = new Float64Array(degree + 2);
+    const evalFast = (u) => {
+      const uu = Math.min(Math.max(u, domain[0]), domain[1]);
+      const span = findSpan(n, degree, uu, knots);
+      basisFunctions(span, uu, degree, knots, Nb, leftB, rightB);
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      let w = 0;
+      for (let j = 0; j <= degree; j++) {
+        const idx = span - degree + j;
+        const cp = pts[idx] || [0, 0, 0];
+        const wj = weights ? weights[idx] ?? 1 : 1;
+        const b = Nb[j] * wj;
+        x += b * cp[0];
+        y += b * cp[1];
+        z += b * cp[2];
+        w += b;
+      }
+      return weights && Math.abs(w) > 1e-300 ? [x / w, y / w, z / w] : [x, y, z];
+    };
     const evalAt = (u, nd) => {
       const uu = Math.min(Math.max(u, domain[0]), domain[1]);
       const span = findSpan(n, degree, uu, knots);
@@ -5876,10 +5950,7 @@ function buildCurve(file, ref) {
         dominio: domain,
       },
       knotValues: (knotPart ? knotPart[complesso ? 1 : 7] || [] : []).map(Number),
-      eval: (u) => {
-        const r = evalAt(u, 0)[0];
-        return weights && Math.abs(r.w) > 1e-300 ? scale(r.p, 1 / r.w) : r.p;
-      },
+      eval: evalFast,
       deriv: (u) => {
         const r = evalAt(u, 1);
         if (!weights) return r[1].p;
@@ -6229,32 +6300,97 @@ function buildSurface(file, ref) {
     const uRange = [uKnots[du], uKnots[nu + 1]];
     const vRange = [vKnots[dv], vKnots[nv + 1]];
 
+    // punti di controllo in un buffer piatto (x,y,z,w) per evitare accessi annidati
+    const cols = nv + 1;
+    const P = new Float64Array((nu + 1) * cols * 4);
+    for (let i = 0; i <= nu; i++) {
+      for (let j = 0; j <= nv; j++) {
+        const cp = (pts[i] && pts[i][j]) || [0, 0, 0];
+        const wij = weights ? weights[i]?.[j] ?? 1 : 1;
+        const k = (i * cols + j) * 4;
+        P[k] = cp[0] * wij;
+        P[k + 1] = cp[1] * wij;
+        P[k + 2] = cp[2] * wij;
+        P[k + 3] = wij;
+      }
+    }
+    // buffer di lavoro riusati a ogni valutazione
+    const Nu = new Float64Array(du + 1);
+    const Nv = new Float64Array(dv + 1);
+    const Du = new Float64Array(du + 1);
+    const Dv = new Float64Array(dv + 1);
+    const left = new Float64Array(Math.max(du, dv) + 2);
+    const right = new Float64Array(Math.max(du, dv) + 2);
+    const scratch = new Float64Array(Math.max(du, dv) + 2);
+
     const evalPt = (u, v) => {
       const uu = Math.min(Math.max(u, uRange[0]), uRange[1]);
       const vv = Math.min(Math.max(v, vRange[0]), vRange[1]);
       const su = findSpan(nu, du, uu, uKnots);
       const sv = findSpan(nv, dv, vv, vKnots);
-      const bu = basisDerivatives(su, uu, du, uKnots, 0)[0];
-      const bv = basisDerivatives(sv, vv, dv, vKnots, 0)[0];
+      basisFunctions(su, uu, du, uKnots, Nu, left, right);
+      basisFunctions(sv, vv, dv, vKnots, Nv, left, right);
       let x = 0;
       let y = 0;
       let z = 0;
       let w = 0;
       for (let i = 0; i <= du; i++) {
-        const iu = su - du + i;
-        const row = pts[iu] || [];
+        const bi = Nu[i];
+        const base = (su - du + i) * cols;
         for (let j = 0; j <= dv; j++) {
-          const iv = sv - dv + j;
-          const cp = row[iv] || [0, 0, 0];
-          const wij = weights ? weights[iu]?.[iv] ?? 1 : 1;
-          const b = bu[i] * bv[j] * wij;
-          x += b * cp[0];
-          y += b * cp[1];
-          z += b * cp[2];
-          w += b;
+          const b = bi * Nv[j];
+          const k = (base + sv - dv + j) * 4;
+          x += b * P[k];
+          y += b * P[k + 1];
+          z += b * P[k + 2];
+          w += b * P[k + 3];
         }
       }
       return weights && Math.abs(w) > 1e-300 ? [x / w, y / w, z / w] : [x, y, z];
+    };
+
+    /** Normale analitica: Su x Sv (con la regola del quoziente per le razionali). */
+    const normalAt = (u, v) => {
+      const uu = Math.min(Math.max(u, uRange[0]), uRange[1]);
+      const vv = Math.min(Math.max(v, vRange[0]), vRange[1]);
+      const su = findSpan(nu, du, uu, uKnots);
+      const sv = findSpan(nv, dv, vv, vKnots);
+      basisAndFirstDerivative(su, uu, du, uKnots, Nu, Du, left, right, scratch);
+      basisAndFirstDerivative(sv, vv, dv, vKnots, Nv, Dv, left, right, scratch);
+      // A = somma pesata (x,y,z,w); Au, Av derivate
+      let ax = 0, ay = 0, az = 0, aw = 0;
+      let ux = 0, uy = 0, uz = 0, uw = 0;
+      let vx = 0, vy = 0, vz = 0, vw = 0;
+      for (let i = 0; i <= du; i++) {
+        const base = (su - du + i) * cols;
+        for (let j = 0; j <= dv; j++) {
+          const k = (base + sv - dv + j) * 4;
+          const b = Nu[i] * Nv[j];
+          const bu = Du[i] * Nv[j];
+          const bv = Nu[i] * Dv[j];
+          ax += b * P[k]; ay += b * P[k + 1]; az += b * P[k + 2]; aw += b * P[k + 3];
+          ux += bu * P[k]; uy += bu * P[k + 1]; uz += bu * P[k + 2]; uw += bu * P[k + 3];
+          vx += bv * P[k]; vy += bv * P[k + 1]; vz += bv * P[k + 2]; vw += bv * P[k + 3];
+        }
+      }
+      let Su;
+      let Sv;
+      if (weights && Math.abs(aw) > 1e-300) {
+        // S = A/w  ->  S' = (A' - S w') / w
+        const sx = ax / aw, sy = ay / aw, sz = az / aw;
+        Su = [(ux - sx * uw) / aw, (uy - sy * uw) / aw, (uz - sz * uw) / aw];
+        Sv = [(vx - sx * vw) / aw, (vy - sy * vw) / aw, (vz - sz * vw) / aw];
+      } else {
+        Su = [ux, uy, uz];
+        Sv = [vx, vy, vz];
+      }
+      const n = cross(Su, Sv);
+      if (len(n) < 1e-12) {
+        // degenerazione (bordo con punti coincidenti): differenze finite
+        const h = 1e-6;
+        return normalize(cross(sub(evalPt(u + h, v), evalPt(u - h, v)), sub(evalPt(u, v + h), evalPt(u, v - h))));
+      }
+      return normalize(n);
     };
 
     const surf = withNormal({
@@ -6273,6 +6409,7 @@ function buildSurface(file, ref) {
         dominioV: vRange,
       },
       eval: evalPt,
+      normal: normalAt,
     });
     surf.project = (pt) => projectNumeric(surf, pt);
     return surf;
@@ -7521,13 +7658,17 @@ function tessellateFace(file, faceEnt, mesh, opts = {}) {
       p: uv.p3 || surf.eval(uv[0], uv[1]),
       segs: [(i - 1 + nRing) % nRing, i],
     }));
+    // cache dei vertici per (u, v): mappe numeriche a due livelli, niente stringhe
     const cache = new Map();
     const emit = (vert) => {
-      const key = vert.uv[0] + '|' + vert.uv[1];
-      let id = cache.get(key);
+      const u = vert.uv[0];
+      const v = vert.uv[1];
+      let riga = cache.get(u);
+      if (!riga) cache.set(u, (riga = new Map()));
+      let id = riga.get(v);
       if (id === undefined) {
-        id = mesh.vertex(vert.p, surfaceNormalAt(surf, vert.uv[0], vert.uv[1], flip));
-        cache.set(key, id);
+        id = mesh.vertex(vert.p, surfaceNormalAt(surf, u, v, flip));
+        riga.set(v, id);
       }
       return id;
     };

@@ -54,7 +54,8 @@ void main() {
   vec3 base = uColor;
   if (abs(vFaceId - uSelectedFace) < 0.5) base = mix(base, vec3(1.0, 0.62, 0.16), 0.8);
   else if (abs(vFaceId - uHoverFace) < 0.5) base = mix(base, vec3(0.45, 0.85, 1.0), 0.6);
-  else if (uSelectedPart > 0.5) base = mix(base, vec3(1.0, 0.85, 0.55), 0.35);
+  else if (uSelectedPart > 0.75) base = mix(base, vec3(1.0, 0.85, 0.55), 0.35);   // parte selezionata
+  else if (uSelectedPart > 0.25) base = mix(base, vec3(0.6, 0.85, 1.0), 0.3);     // parte sotto il puntatore (tabella)
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0) * 0.12;
   vec3 col = base * (0.30 + 0.70 * diff) + vec3(spec) + vec3(rim);
   gl_FragColor = vec4(col, uOpacity);
@@ -187,6 +188,7 @@ export class Renderer {
     this.opacita = 1;
     this.selezione = -1;       // id faccia selezionata
     this.parteSelezionata = -1;
+    this.hoverParte = -1;      // parte evidenziata dal passaggio sulle tabelle
     this.hover = -1;
     this.esplosione = 0;
     this.clip = { attivo: false, normale: [0, 0, 1], offset: 0 };
@@ -469,7 +471,7 @@ export class Renderer {
         gl.uniformMatrix4fv(u.uModel, false, p.modelF32);
         gl.uniformMatrix3fv(u.uNormalMat, false, p.normalF32);
         gl.uniform3fv(u.uColor, p.coloreF32);
-        gl.uniform1f(u.uSelectedPart, i === this.parteSelezionata ? 1 : 0);
+        gl.uniform1f(u.uSelectedPart, i === this.parteSelezionata ? 1 : i === this.hoverParte ? 0.5 : 0);
         bindAttr(gl, a.aPos, p.posBuf, 3);
         bindAttr(gl, a.aNormal, p.normBuf, 3);
         bindAttr(gl, a.aFaceId, p.faceBuf, 1);

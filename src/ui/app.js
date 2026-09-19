@@ -311,6 +311,7 @@ function caricaModello(model, opts = {}) {
     renderer.selezione = -1;
     renderer.parteSelezionata = -1;
     renderer.hover = -1;
+    renderer.hoverParte = -1;
     renderer.misura.punti = [];
     stato.ricercaEntita = '';
     stato.totaleRisultati = 0;
