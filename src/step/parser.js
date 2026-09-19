@@ -333,13 +333,17 @@ function indexReferences(file) {
   }
 }
 
+/** Vero se il testo inizia come un file ISO 10303-21 (dopo BOM e spazi). */
+export function isStepText(text) {
+  return /^\uFEFF?\s*ISO-10303-21\s*;/i.test(text.slice(0, 64));
+}
+
 /**
- * Analizza il testo di un file STEP.
- * @param {string} text
- * @param {(frac:number, label:string)=>void} [onProgress]
- * @returns {StepFile}
+ * Lettura a passi: ogni `yield` e' un avanzamento {frazione, etichetta} e il
+ * valore di ritorno del generatore e' lo StepFile. Permette a chi chiama di
+ * cedere il controllo al browser fra un passo e l'altro.
  */
-export function parseStep(text, onProgress) {
+export function* parseStepSteps(text) {
   const t0 = Date.now();
   const file = new StepFile();
   file.stats.bytes = text.length;
@@ -427,9 +431,9 @@ export function parseStep(text, onProgress) {
         cur.i = semi + 1;
       }
 
-      if (onProgress && cur.i >= nextProgress) {
-        nextProgress = cur.i + Math.max(65536, Math.floor(cur.n / 50));
-        onProgress(cur.i / cur.n, 'lettura entita');
+      if (cur.i >= nextProgress) {
+        nextProgress = cur.i + Math.max(65536, Math.floor(cur.n / 100));
+        yield { frazione: cur.i / cur.n, etichetta: 'lettura entità' };
       }
       continue;
     }
@@ -441,10 +445,46 @@ export function parseStep(text, onProgress) {
   }
 
   if (!dataSections) file.warnings.push('Nessuna sezione DATA trovata.');
+  yield { frazione: 0.97, etichetta: 'indici' };
   indexReferences(file);
   file.stats.lines = 1;
   for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) file.stats.lines++;
   file.stats.parseMs = Date.now() - t0;
-  if (onProgress) onProgress(1, 'lettura completata');
   return file;
+}
+
+/**
+ * Analizza il testo di un file STEP (sincrono).
+ * @param {string} text
+ * @param {(frac:number, label:string)=>void} [onProgress]
+ * @returns {StepFile}
+ */
+export function parseStep(text, onProgress) {
+  const g = parseStepSteps(text);
+  for (;;) {
+    const r = g.next();
+    if (r.done) {
+      if (onProgress) onProgress(1, 'lettura completata');
+      return r.value;
+    }
+    if (onProgress) onProgress(r.value.frazione, r.value.etichetta);
+  }
+}
+
+/** Come parseStep, ma cede il controllo al browser ogni `sliceMs` millisecondi. */
+export async function parseStepAsync(text, onProgress, sliceMs = 40) {
+  const g = parseStepSteps(text);
+  let ultimo = Date.now();
+  for (;;) {
+    const r = g.next();
+    if (r.done) {
+      if (onProgress) onProgress(1, 'lettura completata');
+      return r.value;
+    }
+    if (onProgress) onProgress(r.value.frazione, r.value.etichetta);
+    if (Date.now() - ultimo > sliceMs) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      ultimo = Date.now();
+    }
+  }
 }

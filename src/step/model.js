@@ -19,6 +19,7 @@ import {
 } from './geometry.js';
 import {
   MeshBuilder,
+  appendAll,
   collectFaces,
   contaBordiAperti,
   meshCentroid,
@@ -611,6 +612,17 @@ function bboxOf(positions) {
   return { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
 }
 
+/** Punti [x,y,z][] -> Float32Array piatta (x0,y0,z0,x1,...), trasferibile al worker. */
+function flatPoints(pts) {
+  const out = new Float32Array(pts.length * 3);
+  for (let i = 0; i < pts.length; i++) {
+    out[i * 3] = pts[i][0];
+    out[i * 3 + 1] = pts[i][1];
+    out[i * 3 + 2] = pts[i][2];
+  }
+  return out;
+}
+
 /** Spigoli unici delle facce, campionati per il disegno del wireframe. */
 function collectEdgePolylines(file, faces, tol) {
   const seen = new Set();
@@ -651,7 +663,7 @@ function collectEdgePolylines(file, faces, tol) {
           t1 = t0 + curve.periodic;
         }
         const pts = sampleCurve(curve, t0, t1, tol).map((t) => curve.eval(t));
-        if (pts.length >= 2) out.push({ id: edge.id, tipo: curve.type, punti: pts });
+        if (pts.length >= 2) out.push({ id: edge.id, tipo: curve.type, punti: flatPoints(pts) });
       }
     }
   }
@@ -666,7 +678,7 @@ function collectSetCurves(file, itemEnt, tol) {
     const curve = buildCurve(file, ref);
     if (!curve) continue;
     const pts = sampleCurve(curve, curve.domain[0], curve.domain[1], tol).map((t) => curve.eval(t));
-    if (pts.length >= 2) out.push({ id: (ref && ref.ref) || 0, tipo: curve.type, punti: pts });
+    if (pts.length >= 2) out.push({ id: (ref && ref.ref) || 0, tipo: curve.type, punti: flatPoints(pts) });
   }
   return out;
 }
@@ -674,7 +686,12 @@ function collectSetCurves(file, itemEnt, tol) {
 /**
  * Tassella un elemento geometrico, restituendo mesh, spigoli e misure.
  */
-export function buildPartGeometry(file, itemEnt, opts = {}) {
+/**
+ * Geometria di una parte, a passi: ogni `yield` corrisponde a una faccia
+ * tassellata (cosi' l'interfaccia puo' aggiornare l'avanzamento senza worker).
+ * Il valore di ritorno del generatore e' il risultato di buildPartGeometry.
+ */
+export function* partGeometrySteps(file, itemEnt, opts = {}) {
   const tol = opts.tolerance ?? 0.1;
   const maxDepth = opts.maxDepth ?? 3;
   const diagnostics = [];
@@ -683,13 +700,17 @@ export function buildPartGeometry(file, itemEnt, opts = {}) {
   // Prima passata: ogni faccia nella propria mesh, per poter uniformare dopo
   // il livello di suddivisione (necessario per una mesh a tenuta: le facce
   // adiacenti devono suddividere lo spigolo comune allo stesso modo).
-  const perFaccia = faces.map((face) => {
+  const perFaccia = [];
+  for (let i = 0; i < faces.length; i++) {
+    const face = faces[i];
     const mesh = new MeshBuilder();
     const r = tessellateFace(file, face, mesh, { tolerance: tol, maxDepth });
-    return { face, mesh, r };
-  });
+    perFaccia.push({ face, mesh, r });
+    yield { fatte: i + 1, totali: faces.length * 2 };
+  }
   const livelloMax = perFaccia.reduce((m, x) => Math.max(m, x.r.livello || 0), 0);
-  for (const voce of perFaccia) {
+  for (let i = 0; i < perFaccia.length; i++) {
+    const voce = perFaccia[i];
     if ((voce.r.livello || 0) < livelloMax) {
       const mesh = new MeshBuilder();
       const r = tessellateFace(file, voce.face, mesh, {
@@ -699,19 +720,21 @@ export function buildPartGeometry(file, itemEnt, opts = {}) {
       });
       voce.mesh = mesh;
       voce.r = r;
+      yield { fatte: faces.length + i + 1, totali: faces.length * 2 };
     }
   }
 
-  // unisce le mesh delle facce
+  // unisce le mesh delle facce (senza spread: le facce grandi superano il
+  // limite di argomenti di V8)
   const finale = new MeshBuilder();
   const facce = [];
   let area = 0;
   for (const { face, mesh, r } of perFaccia) {
     const offset = finale.positions.length / 3;
-    finale.positions.push(...mesh.positions);
-    finale.normals.push(...mesh.normals);
-    for (const i of mesh.indices) finale.indices.push(i + offset);
-    finale.faceIds.push(...mesh.faceIds);
+    appendAll(finale.positions, mesh.positions);
+    appendAll(finale.normals, mesh.normals);
+    for (let i = 0; i < mesh.indices.length; i++) finale.indices.push(mesh.indices[i] + offset);
+    appendAll(finale.faceIds, mesh.faceIds);
     area += r.area;
     facce.push({
       id: face.id,
@@ -720,7 +743,7 @@ export function buildPartGeometry(file, itemEnt, opts = {}) {
       triangoli: r.triangles,
       area: r.area,
     });
-    if (r.problems.length) diagnostics.push(...r.problems);
+    if (r.problems.length) appendAll(diagnostics, r.problems);
   }
 
   const positions = new Float32Array(finale.positions);
@@ -785,6 +808,15 @@ export function buildPartGeometry(file, itemEnt, opts = {}) {
   };
 }
 
+/** Versione sincrona di partGeometrySteps. */
+export function buildPartGeometry(file, itemEnt, opts = {}) {
+  const g = partGeometrySteps(file, itemEnt, opts);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+  }
+}
+
 /* ------------------------------------------------------------ statistiche */
 
 export function geometrySummary(file) {
@@ -811,12 +843,10 @@ export function geometrySummary(file) {
 }
 
 /**
- * Costruisce il modello completo.
- * @param {import('./parser.js').StepFile} file
- * @param {{tolerance?:number, onProgress?:(f:number,l:string)=>void, maxDepth?:number}} opts
+ * Costruisce il modello completo, a passi: ogni `yield` e' un avanzamento
+ * {frazione, etichetta}; il valore di ritorno e' il modello.
  */
-export function buildModel(file, opts = {}) {
-  const onProgress = opts.onProgress || (() => {});
+export function* buildModelSteps(file, opts = {}) {
   const units = readUnits(file);
   const scaleToMm = units.lunghezza?.fattore && Number.isFinite(units.lunghezza.fattore)
     ? units.lunghezza.fattore
@@ -824,7 +854,7 @@ export function buildModel(file, opts = {}) {
   units.simbolo = simboloUnita(units.lunghezza);
   units.fattoreVersoMm = scaleToMm;
 
-  onProgress(0.05, 'struttura del prodotto');
+  yield { frazione: 0.05, etichetta: 'struttura del prodotto' };
   const assemblyRoots = readAssembly(file);
   const colors = readColors(file);
 
@@ -866,10 +896,22 @@ export function buildModel(file, opts = {}) {
   const tol = (opts.tolerance ?? 0.1) / (scaleToMm || 1);
   const parti = [];
   const diagnostics = [...file.warnings];
-  istanze.forEach((inst, i) => {
-    onProgress(0.1 + (0.85 * i) / Math.max(1, istanze.length), `tassellazione ${i + 1}/${istanze.length}`);
-    const geo = buildPartGeometry(file, inst.item, { tolerance: tol, maxDepth: opts.maxDepth });
-    diagnostics.push(...geo.diagnostics);
+  for (let i = 0; i < istanze.length; i++) {
+    const inst = istanze[i];
+    const quota = 0.85 / Math.max(1, istanze.length);
+    const etichetta = istanze.length > 1 ? `tassellazione parte ${i + 1} di ${istanze.length}` : 'tassellazione';
+    yield { frazione: 0.1 + quota * i, etichetta };
+    const passi = partGeometrySteps(file, inst.item, { tolerance: tol, maxDepth: opts.maxDepth });
+    let geo;
+    for (;;) {
+      const r = passi.next();
+      if (r.done) {
+        geo = r.value;
+        break;
+      }
+      yield { frazione: 0.1 + quota * (i + r.value.fatte / Math.max(1, r.value.totali)), etichetta };
+    }
+    appendAll(diagnostics, geo.diagnostics);
     parti.push({
       ...geo,
       nome: inst.nodo,
@@ -878,7 +920,7 @@ export function buildModel(file, opts = {}) {
       matrice: inst.matrice,
       colore: colors.get(inst.item.id) || null,
     });
-  });
+  }
 
   // bounding box globale (con le trasformazioni applicate)
   const min = [Infinity, Infinity, Infinity];
@@ -897,7 +939,7 @@ export function buildModel(file, opts = {}) {
     ? { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] }
     : { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] };
 
-  onProgress(0.98, 'riepilogo');
+  yield { frazione: 0.98, etichetta: 'riepilogo' };
   const model = {
     header: readHeader(file),
     units,
@@ -923,6 +965,46 @@ export function buildModel(file, opts = {}) {
     conteggiTipi: file.typeCounts(),
     diagnostics,
   };
-  onProgress(1, 'pronto');
   return model;
+}
+
+/**
+ * Costruisce il modello completo (sincrono).
+ * @param {import('./parser.js').StepFile} file
+ * @param {{tolerance?:number, onProgress?:(f:number,l:string)=>void, maxDepth?:number}} opts
+ */
+export function buildModel(file, opts = {}) {
+  const onProgress = opts.onProgress || (() => {});
+  const g = buildModelSteps(file, opts);
+  for (;;) {
+    const r = g.next();
+    if (r.done) {
+      onProgress(1, 'pronto');
+      return r.value;
+    }
+    onProgress(r.value.frazione, r.value.etichetta);
+  }
+}
+
+/**
+ * Come buildModel, ma cede il controllo al browser a intervalli regolari:
+ * l'interfaccia resta reattiva anche senza web worker (versione a file unico).
+ */
+export async function buildModelAsync(file, opts = {}) {
+  const onProgress = opts.onProgress || (() => {});
+  const fetta = opts.sliceMs ?? 40;
+  const g = buildModelSteps(file, opts);
+  let ultimo = Date.now();
+  for (;;) {
+    const r = g.next();
+    if (r.done) {
+      onProgress(1, 'pronto');
+      return r.value;
+    }
+    onProgress(r.value.frazione, r.value.etichetta);
+    if (Date.now() - ultimo > fetta) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      ultimo = Date.now();
+    }
+  }
 }

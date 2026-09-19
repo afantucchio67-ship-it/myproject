@@ -169,10 +169,16 @@ export class Renderer {
         return b;
       };
       // spigoli: segmenti consecutivi delle polilinee
-      const segs = [];
+      // polilinee (Float32Array piatte) -> segmenti consecutivi
+      let nSeg = 0;
+      for (const e of part.spigoli || []) nSeg += Math.max(0, e.punti.length / 3 - 1);
+      const segs = new Float32Array(nSeg * 6);
+      let k = 0;
       for (const e of part.spigoli || []) {
-        for (let i = 0; i + 1 < e.punti.length; i++) {
-          segs.push(...e.punti[i], ...e.punti[i + 1]);
+        const p = e.punti;
+        for (let i = 0; i + 5 < p.length; i += 3) {
+          segs[k++] = p[i]; segs[k++] = p[i + 1]; segs[k++] = p[i + 2];
+          segs[k++] = p[i + 3]; segs[k++] = p[i + 4]; segs[k++] = p[i + 5];
         }
       }
       const bb = part.bbox;
@@ -187,7 +193,7 @@ export class Renderer {
         faceBuf: buf(vertexFaceId),
         idxBuf: buf(indices, gl.ELEMENT_ARRAY_BUFFER),
         count: indices.length,
-        edgeBuf: segs.length ? buf(new Float32Array(segs)) : null,
+        edgeBuf: segs.length ? buf(segs) : null,
         edgeCount: segs.length / 3,
         bboxBuf: buf(new Float32Array(bboxLines)),
         bboxCount: bboxLines.length / 3,

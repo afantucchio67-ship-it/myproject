@@ -9,11 +9,18 @@ import { buildModel } from '../step/model.js';
 
 let file = null;
 let nomeFile = '';
+/** Testo ricostruito per entità (le ricerche testuali lo riusano). */
+let cacheTesto = new Map();
 
 function entityText(ent) {
+  let t = cacheTesto.get(ent.id);
+  if (t !== undefined) return t;
   const part = (p) => `${p.type}(${p.params.map(valueToText).join(',')})`;
-  if (ent.complex) return `#${ent.id}=(${ent.complex.map(part).join('')});`;
-  return `#${ent.id}=${part({ type: ent.type, params: ent.params })};`;
+  t = ent.complex
+    ? `#${ent.id}=(${ent.complex.map(part).join('')});`
+    : `#${ent.id}=${part({ type: ent.type, params: ent.params })};`;
+  cacheTesto.set(ent.id, t);
+  return t;
 }
 
 function collectRefs(value, out = []) {
@@ -47,6 +54,7 @@ function transferables(model) {
   const list = [];
   for (const p of model.parti) {
     list.push(p.mesh.positions.buffer, p.mesh.normals.buffer, p.mesh.indices.buffer, p.mesh.faceIds.buffer);
+    for (const e of p.spigoli || []) list.push(e.punti.buffer);
   }
   return list;
 }
@@ -56,6 +64,7 @@ self.onmessage = (ev) => {
   try {
     if (msg.type === 'load') {
       nomeFile = msg.nome || '';
+      cacheTesto = new Map();
       self.postMessage({ type: 'progress', frazione: 0.02, etichetta: 'lettura del file' });
       file = parseStep(msg.text, (frazione, etichetta) =>
         self.postMessage({ type: 'progress', frazione: frazione * 0.35, etichetta }));
@@ -84,38 +93,45 @@ self.onmessage = (ev) => {
     }
     if (msg.type === 'search') {
       const q = String(msg.query || '').trim().toUpperCase();
-      const limite = msg.limite || 200;
+      const limite = msg.limite || 300;
       const risultati = [];
+      let totale = 0;
       if (!file) return;
       if (/^#?\d+$/.test(q)) {
         const info = entityInfo(Number(q.replace('#', '')));
         if (info) risultati.push({ id: info.id, tipi: info.tipi, testo: info.testo });
-      } else {
+      } else if (q) {
         for (const ent of file.entities.values()) {
-          if (risultati.length >= limite) break;
           if (ent.types.some((t) => t.includes(q))) {
-            risultati.push({ id: ent.id, tipi: ent.types, testo: entityText(ent).slice(0, 400) });
+            totale++;
+            if (risultati.length < limite) {
+              risultati.push({ id: ent.id, tipi: ent.types, testo: entityText(ent).slice(0, 400) });
+            }
           }
         }
-        if (!risultati.length) {
+        if (!totale) {
           for (const ent of file.entities.values()) {
-            if (risultati.length >= limite) break;
             const testo = entityText(ent);
             if (testo.toUpperCase().includes(q)) {
-              risultati.push({ id: ent.id, tipi: ent.types, testo: testo.slice(0, 400) });
+              totale++;
+              if (risultati.length < limite) {
+                risultati.push({ id: ent.id, tipi: ent.types, testo: testo.slice(0, 400) });
+              }
             }
           }
         }
       }
-      self.postMessage({ type: 'search', risultati, query: msg.query });
+      self.postMessage({ type: 'search', risultati, query: msg.query, totale: totale || risultati.length });
       return;
     }
     if (msg.type === 'entitiesOfType') {
       if (!file) return;
-      const list = file.ofType(String(msg.tipo || '').toUpperCase()).slice(0, msg.limite || 500);
+      const tutti = file.ofType(String(msg.tipo || '').toUpperCase());
+      const list = tutti.slice(0, msg.limite || 500);
       self.postMessage({
         type: 'search',
         query: msg.tipo,
+        totale: tutti.length,
         risultati: list.map((e) => ({ id: e.id, tipi: e.types, testo: entityText(e).slice(0, 400) })),
       });
     }

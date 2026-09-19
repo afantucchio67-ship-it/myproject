@@ -80,7 +80,7 @@ test('le normali dei triangoli puntano verso l’esterno', () => {
 test('gli spigoli del modello sono disponibili per il wireframe', () => {
   const p = modello(cuboStep(10)).parti[0];
   assert.equal(p.spigoli.length, 12);
-  assert.ok(p.spigoli.every((s) => s.punti.length >= 2));
+  assert.ok(p.spigoli.every((s) => s.punti instanceof Float32Array && s.punti.length >= 6));
 });
 
 test('statistiche e conteggi delle entità', () => {

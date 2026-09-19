@@ -32,6 +32,12 @@ import {
 
 const FACE_TYPES = ['ADVANCED_FACE', 'FACE_SURFACE', 'CURVE_BOUNDED_SURFACE'];
 
+/** Accoda tutti gli elementi senza spread: `push(...arr)` fallisce oltre ~100k elementi. */
+export function appendAll(target, source) {
+  for (let i = 0; i < source.length; i++) target.push(source[i]);
+  return target;
+}
+
 /* ------------------------------------------------------- campionamento bordi */
 
 function baseSegments(curve) {
@@ -316,73 +322,106 @@ function bridgeHoles(outer, holes) {
  */
 export function earClip(ring) {
   const n = ring.length;
-  const idx = [...Array(n).keys()];
   const tris = [];
-  const quality = n <= 600;
+  if (n < 3) return tris;
+  const quality = n <= 2000;
   const dist2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
-  const isEar = (i0, i1, i2) => {
+
+  // lista circolare con indici prev/next: rimozione O(1)
+  const prev = new Int32Array(n);
+  const next = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    prev[i] = (i - 1 + n) % n;
+    next[i] = (i + 1) % n;
+  }
+  const vivo = new Uint8Array(n).fill(1);
+  // cache: valido[i], bloccante[i] = vertice che impedisce l'orecchio (-1 se nessuno)
+  const valido = new Uint8Array(n);
+  const bloccante = new Int32Array(n).fill(-1);
+  const costo = new Float64Array(n);
+
+  const valuta = (i1) => {
+    const i0 = prev[i1];
+    const i2 = next[i1];
     const a = ring[i0];
     const b = ring[i1];
     const c = ring[i2];
     const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    if (cr <= 1e-16) return false;
+    bloccante[i1] = -1;
+    if (cr <= 1e-16) {
+      valido[i1] = 0; // riflesso o degenere: dipende solo dai vicini
+      return;
+    }
     const minX = Math.min(a[0], b[0], c[0]);
     const maxX = Math.max(a[0], b[0], c[0]);
     const minY = Math.min(a[1], b[1], c[1]);
     const maxY = Math.max(a[1], b[1], c[1]);
-    for (const m of idx) {
-      if (m === i0 || m === i1 || m === i2) continue;
+    for (let m = next[i2]; m !== i0; m = next[m]) {
       const p = ring[m];
       if (p[0] < minX || p[0] > maxX || p[1] < minY || p[1] > maxY) continue;
-      if (pointInTriangle(p[0], p[1], a[0], a[1], b[0], b[1], c[0], c[1])) return false;
+      if (pointInTriangle(p[0], p[1], a[0], a[1], b[0], b[1], c[0], c[1])) {
+        valido[i1] = 0;
+        bloccante[i1] = m;
+        return;
+      }
     }
-    return true;
+    valido[i1] = 1;
+    costo[i1] = Math.max(dist2(a, b), dist2(b, c), dist2(c, a));
   };
+  for (let i = 0; i < n; i++) valuta(i);
+
+  let restanti = n;
+  let testa = 0;
   let guard = 0;
-  while (idx.length > 3 && guard++ < 4 * n + 100) {
+  while (restanti > 3 && guard++ < 4 * n + 100) {
     let chosen = -1;
     let bestCost = Infinity;
-    for (let k = 0; k < idx.length; k++) {
-      const i0 = idx[(k - 1 + idx.length) % idx.length];
-      const i1 = idx[k];
-      const i2 = idx[(k + 1) % idx.length];
-      if (!isEar(i0, i1, i2)) continue;
+    let i = testa;
+    for (let k = 0; k < restanti; k++, i = next[i]) {
+      if (!valido[i]) continue;
       if (!quality) {
-        chosen = k;
+        chosen = i;
         break;
       }
-      const cost = Math.max(
-        dist2(ring[i0], ring[i1]),
-        dist2(ring[i1], ring[i2]),
-        dist2(ring[i2], ring[i0]),
-      );
-      if (cost < bestCost) {
-        bestCost = cost;
-        chosen = k;
+      if (costo[i] < bestCost) {
+        bestCost = costo[i];
+        chosen = i;
       }
     }
     if (chosen < 0) {
       // nessun orecchio valido (anello degenere o autointersecante):
       // stacca il triangolo meno degenere per non bloccarsi
       let bestArea = -Infinity;
-      for (let k = 0; k < idx.length; k++) {
-        const a = ring[idx[(k - 1 + idx.length) % idx.length]];
-        const b = ring[idx[k]];
-        const c = ring[idx[(k + 1) % idx.length]];
+      i = testa;
+      for (let k = 0; k < restanti; k++, i = next[i]) {
+        const a = ring[prev[i]];
+        const b = ring[i];
+        const c = ring[next[i]];
         const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
         if (cr > bestArea) {
           bestArea = cr;
-          chosen = k;
+          chosen = i;
         }
       }
     }
-    const i0 = idx[(chosen - 1 + idx.length) % idx.length];
-    const i1 = idx[chosen];
-    const i2 = idx[(chosen + 1) % idx.length];
-    tris.push([i0, i1, i2]);
-    idx.splice(chosen, 1);
+    const i0 = prev[chosen];
+    const i2 = next[chosen];
+    tris.push([i0, chosen, i2]);
+    // rimozione dalla lista circolare
+    next[i0] = i2;
+    prev[i2] = i0;
+    vivo[chosen] = 0;
+    restanti--;
+    if (testa === chosen) testa = i2;
+    // cambiano solo i vicini e gli orecchi bloccati dal vertice rimosso
+    valuta(i0);
+    valuta(i2);
+    i = testa;
+    for (let k = 0; k < restanti; k++, i = next[i]) {
+      if (bloccante[i] === chosen) valuta(i);
+    }
   }
-  if (idx.length === 3) tris.push([idx[0], idx[1], idx[2]]);
+  if (restanti === 3) tris.push([testa, next[testa], next[next[testa]]]);
   return tris;
 }
 
@@ -583,10 +622,8 @@ function normalizeWinding(mesh, startTri) {
     else keepIdx.push(ia, ib, ic);
     keepFace.push(mesh.faceIds[t]);
   }
-  mesh.indices.length = 0;
-  mesh.indices.push(...keepIdx);
-  mesh.faceIds.length = 0;
-  mesh.faceIds.push(...keepFace);
+  mesh.indices = keepIdx;
+  mesh.faceIds = keepFace;
 }
 
 /**
@@ -694,13 +731,21 @@ function tessellateBand(surf, rings, tol, flip, mesh, faceId) {
       vs.push(v);
     }
   }
-  const v0 = Math.min(...vs);
-  let v1 = Math.max(...vs);
+  let v0 = Infinity;
+  let v1 = -Infinity;
+  let uMin = Infinity;
+  let uMax = -Infinity;
+  for (let i = 0; i < vs.length; i++) {
+    if (vs[i] < v0) v0 = vs[i];
+    if (vs[i] > v1) v1 = vs[i];
+    if (us[i] < uMin) uMin = us[i];
+    if (us[i] > uMax) uMax = us[i];
+  }
   if (!(v1 > v0)) {
     v1 = v0 + 1e-6;
   }
   const u0 = 0;
-  const u1 = uPeriod || Math.max(...us) - Math.min(...us) || 1;
+  const u1 = uPeriod || uMax - uMin || 1;
   // numero di suddivisioni dalla tolleranza
   const probe = (n, along) => {
     let maxErr = 0;
@@ -775,7 +820,7 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
   }
 
   const { rings, problems: ringProblems } = faceRings(file, faceEnt, tol);
-  problems.push(...ringProblems);
+  appendAll(problems, ringProblems);
   if (!rings.length) {
     problems.push(`#${faceEnt.id}: nessun contorno utilizzabile`);
     return { triangles: 0, area: 0, surfaceType: surf.type, problems };
@@ -914,7 +959,7 @@ export function collectFaces(file, itemEnt, seen = new Set()) {
   const push = (refs) => {
     for (const r of refs || []) {
       const e = file.get(r);
-      if (e) out.push(...collectFaces(file, e, seen));
+      if (e) appendAll(out, collectFaces(file, e, seen));
     }
   };
   if (FACE_TYPES.some((ft) => t.includes(ft))) {
@@ -924,7 +969,7 @@ export function collectFaces(file, itemEnt, seen = new Set()) {
   if (t.includes('MANIFOLD_SOLID_BREP') || t.includes('BREP_WITH_VOIDS')) {
     const p = itemEnt.partParams('MANIFOLD_SOLID_BREP') || itemEnt.params;
     const outerShell = file.get(p[1]);
-    if (outerShell) out.push(...collectFaces(file, outerShell, seen));
+    if (outerShell) appendAll(out, collectFaces(file, outerShell, seen));
     const voidsP = itemEnt.partParams('BREP_WITH_VOIDS');
     if (voidsP) push(voidsP[1] || voidsP[2]);
     return out;
@@ -937,7 +982,7 @@ export function collectFaces(file, itemEnt, seen = new Set()) {
   if (t.includes('ORIENTED_CLOSED_SHELL') || t.includes('ORIENTED_OPEN_SHELL')) {
     const p = itemEnt.params;
     const inner = file.get(p[2] ?? p[1]);
-    if (inner) out.push(...collectFaces(file, inner, seen));
+    if (inner) appendAll(out, collectFaces(file, inner, seen));
     return out;
   }
   if (t.includes('SHELL_BASED_SURFACE_MODEL')) {
@@ -1011,17 +1056,37 @@ export { MeshBuilder, FACE_TYPES };
  * mesh e' a tenuta e area/volume sono affidabili.
  */
 export function contaBordiAperti(positions, indices, tolleranza = 1e-4) {
-  const q = (i) =>
-    Math.round(positions[i] / tolleranza) + ',' +
-    Math.round(positions[i + 1] / tolleranza) + ',' +
-    Math.round(positions[i + 2] / tolleranza);
+  // 1) salda i vertici coincidenti: indice -> id saldato (una chiave per vertice)
+  const nVert = positions.length / 3;
+  const saldato = new Int32Array(nVert);
+  const idPerChiave = new Map();
+  let nextId = 0;
+  const inv = 1 / tolleranza;
+  for (let v = 0; v < nVert; v++) {
+    const key =
+      Math.round(positions[v * 3] * inv) + ',' +
+      Math.round(positions[v * 3 + 1] * inv) + ',' +
+      Math.round(positions[v * 3 + 2] * inv);
+    let id = idPerChiave.get(key);
+    if (id === undefined) {
+      id = nextId++;
+      idPerChiave.set(key, id);
+    }
+    saldato[v] = id;
+  }
+  // 2) conta i lati con chiave numerica (min * N + max)
+  const N = nextId;
   const conta = new Map();
   for (let t = 0; t < indices.length; t += 3) {
-    const v = [q(indices[t] * 3), q(indices[t + 1] * 3), q(indices[t + 2] * 3)];
-    for (let k = 0; k < 3; k++) {
-      const a = v[k];
-      const b = v[(k + 1) % 3];
-      const key = a < b ? a + '|' + b : b + '|' + a;
+    const a = saldato[indices[t]];
+    const b = saldato[indices[t + 1]];
+    const c = saldato[indices[t + 2]];
+    const lati = [a, b, b, c, c, a];
+    for (let k = 0; k < 6; k += 2) {
+      const x = lati[k];
+      const y = lati[k + 1];
+      if (x === y) continue;
+      const key = x < y ? x * N + y : y * N + x;
       conta.set(key, (conta.get(key) || 0) + 1);
     }
   }

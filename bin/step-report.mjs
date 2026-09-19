@@ -12,40 +12,76 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parseStep } from '../src/step/parser.js';
 import { buildModel } from '../src/step/model.js';
+import { entitaCSV, facceCSV, partiCSV, reportJSON } from '../src/ui/exporters.js';
 
-const argv = process.argv.slice(2);
-const files = argv.filter((a) => !a.startsWith('--') && !/^[\d.]+$/.test(a) ||
-  (!a.startsWith('--') && argv[argv.indexOf(a) - 1] !== '--tolleranza' && !/^[\d.]+$/.test(a)));
-const flag = (nome) => argv.includes('--' + nome);
-const valore = (nome, dflt) => {
-  const i = argv.indexOf('--' + nome);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
-};
+const USO = 'Uso: node bin/step-report.mjs <file.stp> [...] [--json] [--csv facce|parti|entita] [--tolleranza 0.1]';
 
-if (!files.length) {
-  console.error('Uso: node bin/step-report.mjs <file.stp> [--json] [--csv facce|parti|entita] [--tolleranza 0.1]');
+/** Analisi degli argomenti: le opzioni con valore consumano il token successivo. */
+function leggiArgomenti(argv) {
+  const opzioni = { files: [], json: false, csv: null, tolleranza: 0.1 };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--json') opzioni.json = true;
+    else if (a === '--csv') {
+      const v = argv[i + 1];
+      if (!v || v.startsWith('--')) opzioni.csv = 'parti';
+      else {
+        opzioni.csv = v;
+        i++;
+      }
+    } else if (a === '--tolleranza' || a === '--tolerance') {
+      const v = Number(argv[i + 1]);
+      if (!Number.isFinite(v) || v <= 0) {
+        console.error('--tolleranza richiede un numero positivo (mm)');
+        process.exit(1);
+      }
+      opzioni.tolleranza = v;
+      i++;
+    } else if (a === '--help' || a === '-h') {
+      console.log(USO);
+      process.exit(0);
+    } else if (a.startsWith('--')) {
+      console.error(`opzione sconosciuta: ${a}\n${USO}`);
+      process.exit(1);
+    } else opzioni.files.push(a);
+  }
+  return opzioni;
+}
+
+const opzioni = leggiArgomenti(process.argv.slice(2));
+if (!opzioni.files.length) {
+  console.error(USO);
+  process.exit(1);
+}
+if (opzioni.csv && !['facce', 'parti', 'entita'].includes(opzioni.csv)) {
+  console.error(`--csv accetta facce, parti o entita (ricevuto: ${opzioni.csv})`);
   process.exit(1);
 }
 
-const tolleranza = Number(valore('tolleranza', '0.1'));
 const fmt = (v, d = 2) =>
   typeof v === 'number' ? v.toLocaleString('it-IT', { minimumFractionDigits: d, maximumFractionDigits: d }) : String(v);
 
-for (const percorso of files) {
-  const testo = readFileSync(percorso, 'latin1');
-  const file = parseStep(testo);
-  const model = buildModel(file, { tolerance: tolleranza });
-  model.nomeFileCaricato = basename(percorso);
-
-  if (flag('json')) {
-    const { reportJSONCli } = await import('./report-json.mjs');
-    console.log(reportJSONCli(model));
+let errori = 0;
+for (const percorso of opzioni.files) {
+  let testo;
+  try {
+    testo = readFileSync(percorso, 'latin1');
+  } catch (err) {
+    console.error(`${percorso}: impossibile leggere il file (${err.code || err.message})`);
+    errori++;
     continue;
   }
-  if (flag('csv')) {
-    const quale = valore('csv', 'parti');
-    const { csvCli } = await import('./report-json.mjs');
-    console.log(csvCli(model, quale));
+  const file = parseStep(testo);
+  const model = buildModel(file, { tolerance: opzioni.tolleranza });
+  model.nomeFileCaricato = basename(percorso);
+
+  if (opzioni.json) {
+    console.log(reportJSON(model));
+    continue;
+  }
+  if (opzioni.csv) {
+    const gen = { facce: facceCSV, parti: partiCSV, entita: entitaCSV }[opzioni.csv];
+    console.log(gen(model).replace(/^﻿/, ''));
     continue;
   }
 
@@ -56,7 +92,7 @@ for (const percorso of files) {
   console.log(`schema            : ${h.schema}`);
   console.log(`nome dichiarato   : ${h.nomeFile}`);
   console.log(`data              : ${h.dataFile}`);
-  console.log(`origine           : ${h.versionePreprocessore} ${h.sistemaOrigine.trim()}`);
+  console.log(`origine           : ${[h.versionePreprocessore, h.sistemaOrigine.trim()].filter(Boolean).join(' ')}`);
   console.log(`unità             : ${u.lunghezza ? u.lunghezza.nome : 'n.d.'} / ${u.angolo ? u.angolo.nome : 'n.d.'}` +
     (u.incertezza ? ` · incertezza ${u.incertezza.valore}` : ''));
   console.log(`entità            : ${model.statistiche.entita} (${model.statistiche.tipi} tipi) in ${model.statistiche.msLettura} ms`);
@@ -119,3 +155,4 @@ for (const percorso of files) {
     for (const d of model.diagnostics.slice(0, 20)) console.log('  ! ' + d);
   }
 }
+process.exit(errori ? 1 : 0);
