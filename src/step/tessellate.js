@@ -100,8 +100,10 @@ function sampleOrientedEdge(file, orientedEdge, tol) {
   if (!curve) return { unsupported: edge, points: [] };
 
   const vpoint = (v) => (v ? readPoint(file, (v.partParams('VERTEX_POINT') || v.params)[1]) : null);
-  const ps = vpoint(startV);
-  const pe = vpoint(endV);
+  // con same_sense .F. lo spigolo percorre la curva al contrario: il vertice
+  // iniziale dello spigolo corrisponde al parametro finale sulla curva
+  const ps = sameSense ? vpoint(startV) : vpoint(endV);
+  const pe = sameSense ? vpoint(endV) : vpoint(startV);
 
   let t0 = curve.domain[0];
   let t1 = curve.domain[1];
@@ -136,12 +138,26 @@ function sampleOrientedEdge(file, orientedEdge, tol) {
   return { points, params, curve, edge, closedEdge };
 }
 
-/** Anelli 3D di una faccia: [{points, isOuter, edges}] */
+/**
+ * Anelli 3D di una faccia: { rings: [{points, isOuter, edges}], apici, problems }.
+ * - i VERTEX_LOOP (apice di un cono, poli di una sfera) diventano `apici`;
+ * - uno spigolo percorso due volte nello stesso loop e' una cucitura (stile
+ *   OpenCascade/FreeCAD): viene tolto e il loop si spezza negli anelli reali.
+ */
 export function faceRings(file, faceEnt, tol) {
   const params = faceEnt.partParams('ADVANCED_FACE') || faceEnt.partParams('FACE_SURFACE') || faceEnt.params;
   const bounds = params[1] || [];
   const rings = [];
+  const apici = [];
   const problems = [];
+  const pulisci = (pts) => {
+    const clean = [];
+    for (const p of pts) {
+      if (!clean.length || dist(clean[clean.length - 1], p) > 1e-9) clean.push(p);
+    }
+    while (clean.length > 1 && dist(clean[0], clean[clean.length - 1]) < 1e-9) clean.pop();
+    return clean;
+  };
   for (const bref of bounds) {
     const bound = file.get(bref);
     if (!bound) continue;
@@ -150,51 +166,77 @@ export function faceRings(file, faceEnt, tol) {
     const loop = file.get(bp[1]);
     if (!loop) continue;
     if (loop.has('VERTEX_LOOP')) {
-      problems.push(`#${faceEnt.id}: VERTEX_LOOP ignorato`);
+      const v = file.get((loop.partParams('VERTEX_LOOP') || loop.params)[1]);
+      const pt = v ? readPoint(file, (v.partParams('VERTEX_POINT') || v.params)[1]) : null;
+      if (pt) apici.push(pt);
       continue;
     }
     const lp = loop.partParams('EDGE_LOOP') || loop.partParams('POLY_LOOP') || loop.params;
-    let pts = [];
-    const edgeRefs = [];
+    const isOuter = bound.has('FACE_OUTER_BOUND');
     if (loop.has('POLY_LOOP')) {
-      pts = (lp[1] || []).map((r) => readPoint(file, r) || [0, 0, 0]);
-    } else {
-      for (const oref of lp[1] || []) {
-        const seg = sampleOrientedEdge(file, oref, tol);
-        if (!seg) continue;
-        if (seg.unsupported) {
-          problems.push(`#${faceEnt.id}: curva non supportata su #${seg.unsupported.id}`);
-          continue;
-        }
-        edgeRefs.push(seg.edge.id);
-        const sp = seg.points;
+      const pts = (lp[1] || []).map((r) => readPoint(file, r) || [0, 0, 0]);
+      if (!orientation) pts.reverse();
+      const clean = pulisci(pts);
+      if (clean.length >= 3) rings.push({ points: clean, isOuter, edges: [] });
+      continue;
+    }
+    // segmenti dello spigolo, ognuno con l'id dell'EDGE_CURVE
+    const segmenti = [];
+    for (const oref of lp[1] || []) {
+      const seg = sampleOrientedEdge(file, oref, tol);
+      if (!seg) continue;
+      if (seg.unsupported) {
+        problems.push(`#${faceEnt.id}: curva non supportata su #${seg.unsupported.id}`);
+        continue;
+      }
+      segmenti.push({ id: seg.edge.id, points: seg.points });
+    }
+    // cuciture: spigoli presenti due volte nel loop
+    const conteggio = new Map();
+    for (const sg of segmenti) conteggio.set(sg.id, (conteggio.get(sg.id) || 0) + 1);
+    const cuciture = new Set([...conteggio].filter(([, n]) => n >= 2).map(([id]) => id));
+    // spezza il loop alle cuciture (il loop e' circolare: ruota per iniziare da una cucitura)
+    let gruppi = [];
+    if (cuciture.size) {
+      const primo = segmenti.findIndex((sg) => cuciture.has(sg.id));
+      const ruotati = segmenti.slice(primo).concat(segmenti.slice(0, primo));
+      let corrente = [];
+      for (const sg of ruotati) {
+        if (cuciture.has(sg.id)) {
+          if (corrente.length) gruppi.push(corrente);
+          corrente = [];
+        } else corrente.push(sg);
+      }
+      if (corrente.length) gruppi.push(corrente);
+    } else gruppi = [segmenti];
+
+    for (const gruppo of gruppi) {
+      let pts = [];
+      const edgeRefs = [];
+      for (const sg of gruppo) {
+        edgeRefs.push(sg.id);
+        const sp = sg.points;
         if (!pts.length) pts.push(...sp);
         else {
           const last = pts[pts.length - 1];
-          const start = sp[0];
           // ricuci il verso se necessario
-          if (dist(last, start) > dist(last, sp[sp.length - 1])) {
+          if (dist(last, sp[0]) > dist(last, sp[sp.length - 1])) {
             for (let i = sp.length - 2; i >= 0; i--) pts.push(sp[i]);
           } else {
             for (let i = 1; i < sp.length; i++) pts.push(sp[i]);
           }
         }
       }
-    }
-    if (!orientation) pts.reverse();
-    // rimuovi duplicati consecutivi e la chiusura ripetuta
-    const clean = [];
-    for (const p of pts) {
-      if (!clean.length || dist(clean[clean.length - 1], p) > 1e-9) clean.push(p);
-    }
-    while (clean.length > 1 && dist(clean[0], clean[clean.length - 1]) < 1e-9) clean.pop();
-    if (clean.length >= 3) {
-      rings.push({ points: clean, isOuter: bound.has('FACE_OUTER_BOUND'), edges: edgeRefs });
-    } else if (clean.length) {
-      problems.push(`#${faceEnt.id}: anello degenere (${clean.length} punti)`);
+      if (!orientation) pts.reverse();
+      const clean = pulisci(pts);
+      if (clean.length >= 3) {
+        rings.push({ points: clean, isOuter: isOuter && gruppi.length === 1, edges: edgeRefs, daCucitura: cuciture.size > 0 });
+      } else if (clean.length) {
+        problems.push(`#${faceEnt.id}: anello degenere (${clean.length} punti)`);
+      }
     }
   }
-  return { rings, problems };
+  return { rings, apici, problems };
 }
 
 /* ------------------------------------------------------- proiezione UV */
@@ -359,6 +401,8 @@ export function earClip(ring) {
     for (let m = next[i2]; m !== i0; m = next[m]) {
       const p = ring[m];
       if (p[0] < minX || p[0] > maxX || p[1] < minY || p[1] > maxY) continue;
+      // i vertici duplicati dai ponti dei fori coincidono con a, b o c: non bloccano
+      if ((p[0] === a[0] && p[1] === a[1]) || (p[0] === b[0] && p[1] === b[1]) || (p[0] === c[0] && p[1] === c[1])) continue;
       if (pointInTriangle(p[0], p[1], a[0], a[1], b[0], b[1], c[0], c[1])) {
         valido[i1] = 0;
         bloccante[i1] = m;
@@ -631,9 +675,29 @@ function normalizeWinding(mesh, startTri) {
  * i punti campionati dai due bordi, cosi' la mesh combacia con le facce
  * adiacenti. Restituisce false se la faccia non ha questa forma.
  */
-function tessellateLoft(surf, rings, tol, flip, mesh, faceId, livello = 0) {
-  const rigato = ['CYLINDRICAL_SURFACE', 'CONICAL_SURFACE', 'SURFACE_OF_LINEAR_EXTRUSION'].includes(surf.type);
-  if (!rigato || rings.length !== 2) return false;
+function tessellateLoft(surf, rings, tol, flip, mesh, faceId, livello = 0, apici = []) {
+  const rigato = ['CYLINDRICAL_SURFACE', 'CONICAL_SURFACE', 'SURFACE_OF_LINEAR_EXTRUSION', 'SURFACE_OF_REVOLUTION'].includes(surf.type);
+  if (!rigato) return false;
+  // cono a punta: ventaglio dal contorno all'apice (i punti del bordo restano
+  // quelli campionati dalla curva, cosi' la base combacia)
+  if (rings.length === 1 && apici.length === 1) {
+    const pts = rings[0].points;
+    const apice = apici[0];
+    const uvA = surf.project(apice);
+    const iApice = mesh.vertex(apice, surfaceNormalAt(surf, uvA[0], uvA[1], flip));
+    const idx = pts.map((p) => {
+      const uv = surf.project(p);
+      return mesh.vertex(p, surfaceNormalAt(surf, uv[0], uv[1], flip));
+    });
+    for (let i = 0; i < idx.length; i++) {
+      const a = idx[i];
+      const b = idx[(i + 1) % idx.length];
+      if (flip) mesh.triangle(a, iApice, b, faceId);
+      else mesh.triangle(a, b, iApice, faceId);
+    }
+    return true;
+  }
+  if (rings.length !== 2) return false;
   // densifica i bordi con gli stessi punti di mezzo delle facce suddivise:
   // le facce adiacenti devono avere vertici coincidenti
   const densifica = (punti) => {
@@ -719,33 +783,63 @@ function tessellateLoft(surf, rings, tol, flip, mesh, faceId, livello = 0) {
   return true;
 }
 
-/** Tassella una faccia periodica completa con una griglia sul periodo. */
-function tessellateBand(surf, rings, tol, flip, mesh, faceId) {
-  const uPeriod = surf.uPeriod;
-  const vs = [];
-  const us = [];
-  for (const r of rings) {
-    for (const p of r.points) {
-      const [u, v] = surf.project(p);
-      us.push(u);
-      vs.push(v);
+/**
+ * Intervallo [v0, v1] della banda di una faccia periodica in u.
+ * - due anelli: il secondo viene srotolato dal lato indicato dall'orientamento
+ *   del primo (l'interno della faccia sta a sinistra del contorno);
+ * - un anello: fino all'apice (cono, polo) oppure al bordo naturale della
+ *   superficie dal lato dell'interno (emisfero);
+ * - nessun anello: tutto il dominio (sfera o toro a una faccia con cuciture).
+ */
+function intervalloV(surf, anelli, apici, flip) {
+  const [vMin, vMax] = surf.vRange;
+  const periodo = surf.vPeriod;
+  const finito = (x) => Number.isFinite(x) && Math.abs(x) < 1e5;
+  const info = anelli.map((uv) => {
+    let netU = 0;
+    let vSum = 0;
+    for (let i = 1; i < uv.length; i++) netU += uv[i][0] - uv[i - 1][0];
+    for (const p of uv) vSum += p[1];
+    return { netU, v: vSum / uv.length };
+  });
+  const apiciV = apici.map((p) => surf.project(p)[1]);
+  if (!info.length) {
+    if (periodo) return [0, periodo];
+    return [finito(vMin) ? vMin : Math.min(...apiciV, 0), finito(vMax) ? vMax : Math.max(...apiciV, 1)];
+  }
+  const A = info[0];
+  // interno verso +v se il contorno gira nel verso +u con la normale della faccia uscente
+  const versoAlto = (A.netU > 0) === !flip;
+  if (info.length === 1) {
+    if (apiciV.length) {
+      const va = apiciV[0];
+      return [Math.min(A.v, va), Math.max(A.v, va)];
     }
+    if (periodo) return versoAlto ? [A.v, A.v + periodo] : [A.v - periodo, A.v];
+    if (versoAlto) return [A.v, finito(vMax) ? vMax : A.v + 1];
+    return [finito(vMin) ? vMin : A.v - 1, A.v];
   }
-  let v0 = Infinity;
-  let v1 = -Infinity;
-  let uMin = Infinity;
-  let uMax = -Infinity;
-  for (let i = 0; i < vs.length; i++) {
-    if (vs[i] < v0) v0 = vs[i];
-    if (vs[i] > v1) v1 = vs[i];
-    if (us[i] < uMin) uMin = us[i];
-    if (us[i] > uMax) uMax = us[i];
+  let vB = info[1].v;
+  if (periodo) {
+    const mod = (x) => ((x % periodo) + periodo) % periodo;
+    vB = versoAlto ? A.v + (mod(vB - A.v) || periodo) : A.v - (mod(A.v - vB) || periodo);
   }
-  if (!(v1 > v0)) {
-    v1 = v0 + 1e-6;
+  let lo = Math.min(A.v, vB);
+  let hi = Math.max(A.v, vB);
+  for (const v of info.slice(2).map((x) => x.v)) {
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
   }
+  return [lo, hi];
+}
+
+/** Tassella una faccia periodica con una griglia sul periodo e sull'intervallo v scelto. */
+function tessellateBand(surf, anelli, apici, tol, flip, mesh, faceId) {
+  const uPeriod = surf.uPeriod;
+  let [v0, v1] = intervalloV(surf, anelli, apici, flip);
+  if (!(v1 > v0)) v1 = v0 + 1e-6;
   const u0 = 0;
-  const u1 = uPeriod || uMax - uMin || 1;
+  const u1 = uPeriod || 1;
   // numero di suddivisioni dalla tolleranza
   const probe = (n, along) => {
     let maxErr = 0;
@@ -803,7 +897,7 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
   const tol = opts.tolerance ?? 0.05;
   const params = faceEnt.partParams('ADVANCED_FACE') || faceEnt.partParams('FACE_SURFACE') || faceEnt.params;
   const surfRef = params[2];
-  const sameSense = params[3] && params[3].enum ? params[3].enum === 'T' : true;
+  const sameSense = (params[3] && params[3].enum ? params[3].enum === 'T' : true) !== !!opts.flip;
   let surf = buildSurface(file, surfRef);
   const problems = [];
   if (!surf) {
@@ -819,9 +913,10 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
     surf = scaledSurface(surf, su, sv);
   }
 
-  const { rings, problems: ringProblems } = faceRings(file, faceEnt, tol);
+  const { rings, apici, problems: ringProblems } = faceRings(file, faceEnt, tol);
   appendAll(problems, ringProblems);
-  if (!rings.length) {
+  const periodica = surf.uPeriod !== null || surf.vPeriod !== null;
+  if (!rings.length && !(periodica && (apici.length || surf.type === 'SPHERICAL_SURFACE' || surf.type === 'TOROIDAL_SURFACE'))) {
     problems.push(`#${faceEnt.id}: nessun contorno utilizzabile`);
     return { triangles: 0, area: 0, surfaceType: surf.type, problems };
   }
@@ -830,14 +925,17 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
   const projected = rings.map((r) => ({ ...r, ...unwrapRing(surf, r.points, tol) }));
   const wrapsU = surf.uPeriod && projected.some((r) => Math.abs(r.netU) > surf.uPeriod * 0.5);
   const wrapsV = surf.vPeriod && projected.some((r) => Math.abs(r.netV) > surf.vPeriod * 0.5);
+  // faccia periodica intera: nessun anello (cuciture), un solo anello con apice
+  // o un anello che gira sul periodo
+  const banda = wrapsU || wrapsV || (periodica && (!rings.length || (rings.length === 1 && apici.length)));
 
   const startTri = mesh.indices.length / 3;
   let livelloUsato = 0;
 
-  if (wrapsU || wrapsV) {
+  if (banda) {
     livelloUsato = opts.livelloForzato ?? 0;
-    if (!tessellateLoft(surf, rings, tol, flip, mesh, faceEnt.id, livelloUsato)) {
-      tessellateBand(surf, rings, tol, flip, mesh, faceEnt.id);
+    if (!tessellateLoft(surf, rings, tol, flip, mesh, faceEnt.id, livelloUsato, apici)) {
+      tessellateBand(surf, projected.map((r) => r.uv), apici, tol, flip, mesh, faceEnt.id);
     }
   } else {
     // scegli il contorno esterno (area UV massima)
@@ -950,28 +1048,36 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
   };
 }
 
-/** Elenca le facce contenute in un item geometrico (solido, shell, faccia). */
-export function collectFaces(file, itemEnt, seen = new Set()) {
+/**
+ * Elenca le facce contenute in un item geometrico (solido, guscio, faccia):
+ * [{ face, flip }], dove `flip` e' vero se un ORIENTED_*_SHELL con
+ * orientamento .F. (o il guscio di un vuoto) ribalta la faccia.
+ */
+export function collectFaces(file, itemEnt, seen = new Set(), flip = false) {
   if (!itemEnt || seen.has(itemEnt.id)) return [];
   seen.add(itemEnt.id);
   const t = itemEnt.types;
   const out = [];
-  const push = (refs) => {
+  const push = (refs, f = flip) => {
     for (const r of refs || []) {
       const e = file.get(r);
-      if (e) appendAll(out, collectFaces(file, e, seen));
+      if (e) appendAll(out, collectFaces(file, e, seen, f));
     }
   };
   if (FACE_TYPES.some((ft) => t.includes(ft))) {
-    out.push(itemEnt);
+    out.push({ face: itemEnt, flip });
     return out;
   }
-  if (t.includes('MANIFOLD_SOLID_BREP') || t.includes('BREP_WITH_VOIDS')) {
-    const p = itemEnt.partParams('MANIFOLD_SOLID_BREP') || itemEnt.params;
+  if (t.includes('MANIFOLD_SOLID_BREP') || t.includes('BREP_WITH_VOIDS') || t.includes('FACETED_BREP')) {
+    const p = itemEnt.partParams('MANIFOLD_SOLID_BREP') || itemEnt.partParams('FACETED_BREP') || itemEnt.params;
     const outerShell = file.get(p[1]);
-    if (outerShell) appendAll(out, collectFaces(file, outerShell, seen));
+    if (outerShell) appendAll(out, collectFaces(file, outerShell, seen, flip));
     const voidsP = itemEnt.partParams('BREP_WITH_VOIDS');
-    if (voidsP) push(voidsP[1] || voidsP[2]);
+    if (voidsP) {
+      // BREP_WITH_VOIDS(name, outer, voids): i vuoti sono gusci orientati verso il vuoto
+      const voids = Array.isArray(voidsP[2]) ? voidsP[2] : Array.isArray(voidsP[1]) ? voidsP[1] : [];
+      push(voids);
+    }
     return out;
   }
   if (t.includes('CLOSED_SHELL') || t.includes('OPEN_SHELL')) {
@@ -980,9 +1086,11 @@ export function collectFaces(file, itemEnt, seen = new Set()) {
     return out;
   }
   if (t.includes('ORIENTED_CLOSED_SHELL') || t.includes('ORIENTED_OPEN_SHELL')) {
+    // ORIENTED_*_SHELL(name, cfs_faces*, shell, orientation)
     const p = itemEnt.params;
     const inner = file.get(p[2] ?? p[1]);
-    if (inner) appendAll(out, collectFaces(file, inner, seen));
+    const orient = p[3] && p[3].enum ? p[3].enum === 'T' : true;
+    if (inner) appendAll(out, collectFaces(file, inner, seen, orient ? flip : !flip));
     return out;
   }
   if (t.includes('SHELL_BASED_SURFACE_MODEL')) {
@@ -1000,10 +1108,20 @@ export function collectFaces(file, itemEnt, seen = new Set()) {
     push(p[1]);
     return out;
   }
-  if (t.includes('GEOMETRIC_SET') || t.includes('GEOMETRIC_CURVE_SET')) {
-    return out; // solo curve: gestite a parte come wireframe
-  }
   return out;
+}
+
+/** Vero se tutti i gusci dell'item sono dichiarati chiusi (solido o modello a gusci chiusi). */
+export function gusciChiusi(file, itemEnt) {
+  const t = itemEnt.types;
+  if (t.includes('MANIFOLD_SOLID_BREP') || t.includes('BREP_WITH_VOIDS') || t.includes('FACETED_BREP') || t.includes('CLOSED_SHELL')) return true;
+  if (t.includes('ORIENTED_CLOSED_SHELL')) return true;
+  if (t.includes('SHELL_BASED_SURFACE_MODEL')) {
+    const p = itemEnt.partParams('SHELL_BASED_SURFACE_MODEL') || itemEnt.params;
+    const shells = file.getAll(p[1]);
+    return shells.length > 0 && shells.every((sh) => sh.has('CLOSED_SHELL') || sh.has('ORIENTED_CLOSED_SHELL'));
+  }
+  return false;
 }
 
 /** Volume con segno della mesh (somma dei tetraedri) — chiuso => volume reale. */

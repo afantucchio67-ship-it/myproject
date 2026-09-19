@@ -22,6 +22,7 @@ import {
   appendAll,
   collectFaces,
   contaBordiAperti,
+  gusciChiusi,
   meshCentroid,
   meshVolume,
   sampleCurve,
@@ -245,6 +246,7 @@ function repItems(file, rep) {
   const p = rep.partParams('SHAPE_REPRESENTATION') ||
     rep.partParams('ADVANCED_BREP_SHAPE_REPRESENTATION') ||
     rep.partParams('MANIFOLD_SURFACE_SHAPE_REPRESENTATION') ||
+    rep.partParams('FACETED_BREP_SHAPE_REPRESENTATION') ||
     rep.partParams('GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION') ||
     rep.partParams('REPRESENTATION') || rep.params;
   return file.getAll(p[1]);
@@ -253,6 +255,7 @@ function repItems(file, rep) {
 const SOLID_LIKE = [
   'MANIFOLD_SOLID_BREP',
   'BREP_WITH_VOIDS',
+  'FACETED_BREP',
   'SHELL_BASED_SURFACE_MODEL',
   'FACE_BASED_SURFACE_MODEL',
   'CLOSED_SHELL',
@@ -656,6 +659,13 @@ function collectEdgePolylines(file, faces, tol) {
       if (!bound) continue;
       const loop = file.get((bound.partParams('FACE_OUTER_BOUND') || bound.partParams('FACE_BOUND') || bound.params)[1]);
       if (!loop) continue;
+      if (loop.has('POLY_LOOP')) {
+        const pts = (loop.partParams('POLY_LOOP') || loop.params)[1] || [];
+        const pl = pts.map((r) => readPoint(file, r)).filter(Boolean);
+        if (pl.length >= 2) out.push({ id: loop.id, tipo: 'POLY_LOOP', punti: flatPoints([...pl, pl[0]]) });
+        continue;
+      }
+      if (!loop.has('EDGE_LOOP')) continue; // VERTEX_LOOP: nessuno spigolo
       const lp = loop.partParams('EDGE_LOOP') || loop.params;
       for (const oref of lp[1] || []) {
         const oe = file.get(oref);
@@ -670,8 +680,9 @@ function collectEdgePolylines(file, faces, tol) {
           const ent = file.get(v);
           return ent ? readPoint(file, (ent.partParams('VERTEX_POINT') || ent.params)[1]) : null;
         };
-        const ps = vp(ep[1]);
-        const pe = vp(ep[2]);
+        const sameSense = ep[4] && ep[4].enum ? ep[4].enum === 'T' : true;
+        const ps = sameSense ? vp(ep[1]) : vp(ep[2]);
+        const pe = sameSense ? vp(ep[2]) : vp(ep[1]);
         let t0 = curve.domain[0];
         let t1 = curve.domain[1];
         const closed = ps && pe ? dist(ps, pe) < 1e-9 : false;
@@ -717,17 +728,18 @@ export function* partGeometrySteps(file, itemEnt, opts = {}) {
   const tol = opts.tolerance ?? 0.1;
   const maxDepth = opts.maxDepth ?? 3;
   const diagnostics = [];
-  const faces = collectFaces(file, itemEnt);
+  const voci = collectFaces(file, itemEnt);
+  const faces = voci.map((v) => v.face);
 
   // Prima passata: ogni faccia nella propria mesh, per poter uniformare dopo
   // il livello di suddivisione (necessario per una mesh a tenuta: le facce
   // adiacenti devono suddividere lo spigolo comune allo stesso modo).
   const perFaccia = [];
-  for (let i = 0; i < faces.length; i++) {
-    const face = faces[i];
+  for (let i = 0; i < voci.length; i++) {
+    const { face, flip } = voci[i];
     const mesh = new MeshBuilder();
-    const r = tessellateFace(file, face, mesh, { tolerance: tol, maxDepth });
-    perFaccia.push({ face, mesh, r });
+    const r = tessellateFace(file, face, mesh, { tolerance: tol, maxDepth, flip });
+    perFaccia.push({ face, flip, mesh, r });
     yield { fatte: i + 1, totali: faces.length * 2 };
   }
   const livelloMax = perFaccia.reduce((m, x) => Math.max(m, x.r.livello || 0), 0);
@@ -739,6 +751,7 @@ export function* partGeometrySteps(file, itemEnt, opts = {}) {
         tolerance: tol,
         maxDepth,
         livelloForzato: livelloMax,
+        flip: voce.flip,
       });
       voce.mesh = mesh;
       voce.r = r;
@@ -772,12 +785,15 @@ export function* partGeometrySteps(file, itemEnt, opts = {}) {
   const normals = new Float32Array(finale.normals);
   const indices = new Uint32Array(finale.indices);
 
-  const chiusa = itemEnt.has('MANIFOLD_SOLID_BREP') || itemEnt.has('CLOSED_SHELL') || itemEnt.has('BREP_WITH_VOIDS');
   const tenuta = contaBordiAperti(finale.positions, finale.indices, Math.max(tol * 0.05, 1e-5));
+  // chiusa: solido o gusci dichiarati chiusi, oppure mesh a tenuta con almeno 4 facce
+  const chiusa = gusciChiusi(file, itemEnt) || (faces.length >= 4 && tenuta.totali > 0 && tenuta.aperti === 0);
 
   let volume = meshVolume(finale.positions, finale.indices);
   let invertito = false;
-  if (volume < 0 && faces.length) {
+  // un guscio chiuso con volume negativo e' orientato verso l'interno:
+  // si raddrizza. Per i modelli aperti le normali restano come da file.
+  if (volume < 0 && faces.length && chiusa) {
     // guscio orientato verso l'interno: raddrizza per avere normali uscenti
     for (let t = 0; t < indices.length; t += 3) {
       const tmp = indices[t + 1];
@@ -843,7 +859,7 @@ export function buildPartGeometry(file, itemEnt, opts = {}) {
 export function geometrySummary(file) {
   const count = (t) => file.ofType(t).length;
   return {
-    solidi: count('MANIFOLD_SOLID_BREP') + count('BREP_WITH_VOIDS'),
+    solidi: count('MANIFOLD_SOLID_BREP') + count('BREP_WITH_VOIDS') + count('FACETED_BREP'),
     gusciChiusi: count('CLOSED_SHELL'),
     gusciAperti: count('OPEN_SHELL'),
     facce: count('ADVANCED_FACE') + count('FACE_SURFACE'),
@@ -874,6 +890,8 @@ export function* buildModelSteps(file, opts = {}) {
     : 1;
   units.simbolo = simboloUnita(units.lunghezza);
   units.fattoreVersoMm = scaleToMm;
+  // gli angoli (semiangolo dei coni, tagli su cerchi) sono nell'unita' del file
+  file.angoloInRad = units.angolo && Number.isFinite(units.angolo.fattore) && units.angolo.fattore > 0 ? units.angolo.fattore : 1;
 
   yield { frazione: 0.05, etichetta: 'struttura del prodotto' };
   const assemblyRoots = readAssembly(file);
@@ -899,7 +917,7 @@ export function* buildModelSteps(file, opts = {}) {
   // elementi geometrici non raggiunti dall'albero (file senza assieme)
   const usati = new Set(istanze.map((i) => i.item.id));
   if (!istanze.length) {
-    for (const t of ['MANIFOLD_SOLID_BREP', 'BREP_WITH_VOIDS', 'SHELL_BASED_SURFACE_MODEL', 'FACE_BASED_SURFACE_MODEL']) {
+    for (const t of ['MANIFOLD_SOLID_BREP', 'BREP_WITH_VOIDS', 'FACETED_BREP', 'SHELL_BASED_SURFACE_MODEL', 'FACE_BASED_SURFACE_MODEL']) {
       for (const item of file.ofType(t)) {
         if (usati.has(item.id)) continue;
         usati.add(item.id);

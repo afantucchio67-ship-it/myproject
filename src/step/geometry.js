@@ -277,13 +277,20 @@ export function buildCurve(file, ref) {
   }
 
   if (t.includes('B_SPLINE_CURVE_WITH_KNOTS') || t.includes('BEZIER_CURVE') || t.includes('B_SPLINE_CURVE')) {
-    const base = e.partParams('B_SPLINE_CURVE_WITH_KNOTS') || e.partParams('B_SPLINE_CURVE') || e.params;
-    const degree = Math.round(Number(base[1]) || 1);
-    const ctrlRefs = base[2] || [];
+    // record semplice: (name, degree, points, form, closed, self_intersect, mults, knots, spec)
+    // record complesso: la parte B_SPLINE_CURVE ha (degree, points, ...) senza il nome,
+    // la parte B_SPLINE_CURVE_WITH_KNOTS ha (mults, knots, spec)
+    const complesso = !!e.complex && !!e.partParams('B_SPLINE_CURVE');
+    const base = complesso ? e.partParams('B_SPLINE_CURVE') : e.partParams('B_SPLINE_CURVE_WITH_KNOTS') || e.params;
+    const off = complesso ? 0 : 1;
+    const degree = Math.round(Number(base[off]) || 1);
+    const ctrlRefs = Array.isArray(base[off + 1]) ? base[off + 1] : [];
     const pts = ctrlRefs.map((r) => readPoint(file, r) || [0, 0, 0]);
     let knots;
-    if (t.includes('B_SPLINE_CURVE_WITH_KNOTS')) {
-      knots = expandKnots(base[6] || [], base[7] || []);
+    const knotPart = e.partParams('B_SPLINE_CURVE_WITH_KNOTS');
+    if (knotPart) {
+      const ko = complesso ? 0 : 6;
+      knots = expandKnots(knotPart[ko] || [], knotPart[ko + 1] || []);
     } else {
       // uniforme/quasi-uniforme: costruisci nodi clamped
       const n = pts.length - 1;
@@ -333,7 +340,7 @@ export function buildCurve(file, ref) {
         razionale: !!weights,
         dominio: domain,
       },
-      knotValues: (base[7] || []).map(Number),
+      knotValues: (knotPart ? knotPart[complesso ? 1 : 7] || [] : []).map(Number),
       eval: (u) => {
         const r = evalAt(u, 0)[0];
         return weights && Math.abs(r.w) > 1e-300 ? scale(r.p, 1 / r.w) : r.p;
@@ -387,11 +394,13 @@ export function buildCurve(file, ref) {
     const p = e.partParams('TRIMMED_CURVE');
     const basis = buildCurve(file, p[1]);
     if (!basis) return null;
+    // i parametri numerici di taglio su cerchi ed ellissi sono angoli: nell'unita' del file
+    const scalaAngolo = basis.periodic ? file.angoloInRad || 1 : 1;
     const readTrim = (list, fallback) => {
       if (!Array.isArray(list)) return fallback;
       for (const v of list) {
-        if (typeof v === 'number') return v;
-        if (v && typeof v === 'object' && 'typed' in v && typeof v.value === 'number') return v.value;
+        if (typeof v === 'number') return v * scalaAngolo;
+        if (v && typeof v === 'object' && 'typed' in v && typeof v.value === 'number') return v.value * scalaAngolo;
         if (v && typeof v === 'object' && 'ref' in v) {
           const pt = readPoint(file, v);
           if (pt && basis.invert) return basis.invert(pt);
@@ -573,7 +582,7 @@ export function buildSurface(file, ref) {
     const m = readPlacement(file, p[1]);
     const inv = invertRigid(m);
     const r = Number(p[2]) || 0;
-    const ang = Number(p[3]) || 0;
+    const ang = (Number(p[3]) || 0) * (file.angoloInRad || 1);
     const tan = Math.tan(ang);
     return withNormal({
       type: 'CONICAL_SURFACE',
@@ -650,18 +659,24 @@ export function buildSurface(file, ref) {
   }
 
   if (t.includes('B_SPLINE_SURFACE_WITH_KNOTS') || t.includes('BEZIER_SURFACE') || t.includes('B_SPLINE_SURFACE')) {
-    const base = e.partParams('B_SPLINE_SURFACE_WITH_KNOTS') || e.partParams('B_SPLINE_SURFACE') || e.params;
-    const du = Math.round(Number(base[1]) || 1);
-    const dv = Math.round(Number(base[2]) || 1);
-    const grid = base[3] || [];
-    const pts = grid.map((row) => (row || []).map((r) => readPoint(file, r) || [0, 0, 0]));
+    // record complesso: B_SPLINE_SURFACE(u_deg, v_deg, grid, form, u_closed, v_closed, self_int)
+    // e B_SPLINE_SURFACE_WITH_KNOTS(u_mults, v_mults, u_knots, v_knots, spec), senza il nome
+    const complesso = !!e.complex && !!e.partParams('B_SPLINE_SURFACE');
+    const base = complesso ? e.partParams('B_SPLINE_SURFACE') : e.partParams('B_SPLINE_SURFACE_WITH_KNOTS') || e.params;
+    const off = complesso ? 0 : 1;
+    const du = Math.round(Number(base[off]) || 1);
+    const dv = Math.round(Number(base[off + 1]) || 1);
+    const grid = Array.isArray(base[off + 2]) ? base[off + 2] : [];
+    const pts = grid.map((row) => (Array.isArray(row) ? row : []).map((r) => readPoint(file, r) || [0, 0, 0]));
     const nu = pts.length - 1;
     const nv = (pts[0] ? pts[0].length : 1) - 1;
     let uKnots;
     let vKnots;
-    if (t.includes('B_SPLINE_SURFACE_WITH_KNOTS')) {
-      uKnots = expandKnots(base[8] || [], base[10] || []);
-      vKnots = expandKnots(base[9] || [], base[11] || []);
+    const knotPart = e.partParams('B_SPLINE_SURFACE_WITH_KNOTS');
+    if (knotPart) {
+      const ko = complesso ? 0 : 8;
+      uKnots = expandKnots(knotPart[ko] || [], knotPart[ko + 2] || []);
+      vKnots = expandKnots(knotPart[ko + 1] || [], knotPart[ko + 3] || []);
     } else {
       const clamped = (n, d) => {
         const k = [];
@@ -737,12 +752,12 @@ export function buildSurface(file, ref) {
       type: 'SURFACE_OF_LINEAR_EXTRUSION',
       uPeriod: curve.periodic || null,
       vPeriod: null,
-      uRange: curve.domain,
+      uRange: curve.type === 'LINE' ? [-1e4, 1e4] : curve.domain,
       vRange: [-1e4, 1e4],
       info: { curvaBase: curve.type, direzione: normalize(dir) },
       eval: (u, v) => add(curve.eval(u), scale(dir, v)),
     });
-    surf.project = (pt) => projectNumeric(surf, pt, curve.domain, [-1e3, 1e3]);
+    surf.project = (pt) => projectNumeric(surf, pt, surf.uRange, [-1e3, 1e3]);
     return surf;
   }
 
@@ -763,16 +778,35 @@ export function buildSurface(file, ref) {
       const w = cross(axis, perp);
       return add(origin, add(par, add(scale(perp, c), scale(w, s))));
     };
+    // con profilo LINE il parametro e' la lunghezza lungo la retta: dominio ampio
+    // (gli esportatori scrivono spesso VECTOR a modulo 1)
+    const vRange = curve.type === 'LINE' ? [-1e4, 1e4] : curve.domain;
     const surf = withNormal({
       type: 'SURFACE_OF_REVOLUTION',
       uPeriod: 2 * Math.PI,
       vPeriod: null,
       uRange: [0, 2 * Math.PI],
-      vRange: curve.domain,
+      vRange,
       info: { curvaBase: curve.type, asse: axis, origine: origin },
       eval: (u, v) => rotate(curve.eval(v), u),
     });
-    surf.project = (pt) => projectNumeric(surf, pt, [0, 2 * Math.PI], curve.domain);
+    // proiezione analitica in u (angolo attorno all'asse) + numerica in v
+    surf.project = (pt) => {
+      const rel = sub(pt, origin);
+      const par = scale(axis, dot(rel, axis));
+      const perp = sub(rel, par);
+      // riferimento angolare: la direzione della curva base rispetto all'asse
+      const p0 = sub(curve.eval(curve.type === 'LINE' ? 0 : curve.domain[0]), origin);
+      let ref = normalize(sub(p0, scale(axis, dot(p0, axis))));
+      if (len(ref) < 1e-9) ref = normalize(cross(axis, Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+      const ref2 = cross(axis, ref);
+      let u = Math.atan2(dot(perp, ref2), dot(perp, ref));
+      if (u < 0) u += 2 * Math.PI;
+      // riporta il punto nel semipiano della curva base e cerca v lungo la curva
+      const nelPiano = add(origin, add(par, scale(ref, len(perp))));
+      const v = closestParam({ ...curve, domain: vRange }, nelPiano, 96);
+      return [u, v];
+    };
     return surf;
   }
 
