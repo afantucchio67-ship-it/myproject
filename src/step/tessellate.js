@@ -1,18 +1,18 @@
 /**
  * Tassellazione BREP: da ADVANCED_FACE / FACE_SURFACE a mesh triangolari.
  *
- * Strategia per ogni faccia:
- *  1. campiona i bordi (edge loop) in 3D con controllo dell'errore di corda;
- *  2. proietta i punti nello spazio parametrico (u,v) della superficie,
- *     srotolando le cuciture sulle superfici periodiche;
- *  3. triangola il poligono UV (contorno esterno + eventuali fori) per
- *     ear clipping;
- *  4. suddivide i triangoli finche' lo scostamento dalla superficie rientra
- *     nella tolleranza (solo superfici curve);
- *  5. calcola normali analitiche, area e contributo al volume.
- *
- * Le facce periodiche complete (cilindri, sfere, tori senza cucitura
- * esplicita) usano una tassellazione a griglia sull'intero periodo.
+ * Per ogni faccia:
+ *  1. i bordi (edge loop) sono campionati in 3D con errore di corda
+ *     controllato; VERTEX_LOOP -> apici, cuciture -> anelli separati;
+ *  2. i punti sono proiettati nello spazio parametrico (u,v), riscalato con
+ *     la metrica locale e srotolato sulle superfici periodiche;
+ *  3. facce rigate periodiche (cilindri, coni, estrusioni, rivoluzioni) con
+ *     due anelli: cucitura diretta fra i bordi (loft); con un apice: ventaglio;
+ *     altre facce periodiche intere (sfere, tori): griglia con intervallo v
+ *     scelto dall'orientamento del contorno;
+ *  4. tutte le altre: ear clipping per qualita' + scambi di Delaunay, poi
+ *     suddivisione uniforme (bordi sulle corde condivise: mesh a tenuta);
+ *  5. normali analitiche, verso dei triangoli allineato, area della faccia.
  */
 
 import {
@@ -211,7 +211,7 @@ export function faceRings(file, faceEnt, tol) {
     } else gruppi = [segmenti];
 
     for (const gruppo of gruppi) {
-      let pts = [];
+      const pts = [];
       const edgeRefs = [];
       for (const sg of gruppo) {
         edgeRefs.push(sg.id);
@@ -346,9 +346,9 @@ function bridgeHoles(outer, holes) {
     const insert = [...rotated, rotated[0], a];
     ring = ring.slice(0, best.j + 1).concat(insert, ring.slice(best.j + 1));
     remaining.splice(best.hi, 1);
-    if (blocked) {
-      // ponte non ideale: la triangolazione potrebbe degradare, ma resta chiusa
-    }
+    // se il ponte interseca altri lati la triangolazione puo' degradare ma
+    // resta chiusa: l'ear clipping ha il ripiego per i casi difficili
+    void blocked;
   }
   return ring;
 }
@@ -836,8 +836,8 @@ function intervalloV(surf, anelli, apici, flip) {
 /** Tassella una faccia periodica con una griglia sul periodo e sull'intervallo v scelto. */
 function tessellateBand(surf, anelli, apici, tol, flip, mesh, faceId) {
   const uPeriod = surf.uPeriod;
-  let [v0, v1] = intervalloV(surf, anelli, apici, flip);
-  if (!(v1 > v0)) v1 = v0 + 1e-6;
+  const [v0, vFine] = intervalloV(surf, anelli, apici, flip);
+  const v1 = vFine > v0 ? vFine : v0 + 1e-6;
   const u0 = 0;
   const u1 = uPeriod || 1;
   // numero di suddivisioni dalla tolleranza

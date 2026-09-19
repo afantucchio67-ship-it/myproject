@@ -3,8 +3,8 @@
  *
  * Disegna le parti tassellate con illuminazione a due lati, gli spigoli del
  * modello, la bounding box, gli assi, il piano di sezione e gli elementi di
- * misura. Gli uniform e le matrici per parte sono in cache: a ogni fotogramma
- * non si alloca nulla.
+ * misura. Gli uniform, i colori fissi e le matrici per parte sono in cache:
+ * nel disegno ordinario non si alloca nulla per fotogramma.
  */
 
 import { identity, invert, multiply, transpose } from './mat4.js';
@@ -199,6 +199,18 @@ export class Renderer {
     this.scratchBuf = gl.createBuffer();
     this.axisBuf = null;
     this.contestoPerso = false;
+    // colori fissi, creati una volta: niente allocazioni per fotogramma
+    this.col = {
+      spigoliScuro: new Float32Array([0.92, 0.94, 0.98]),
+      spigoliChiaro: new Float32Array([0.15, 0.17, 0.2]),
+      bbox: new Float32Array([0.95, 0.65, 0.2]),
+      sezioneScuro: new Float32Array([1.0, 0.62, 0.25]),
+      sezioneChiaro: new Float32Array([0.85, 0.35, 0.1]),
+      misuraLinea: new Float32Array([1.0, 0.62, 0.16]),
+      misuraPunto: new Float32Array([1.0, 0.75, 0.25]),
+      assi: [new Float32Array([0.9, 0.3, 0.3]), new Float32Array([0.35, 0.8, 0.4]), new Float32Array([0.4, 0.55, 0.95])],
+    };
+    this.assiScala = new Float32Array(16);
     this.onContesto = null; // callback (stato: 'perso'|'ripristinato')
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
@@ -480,7 +492,7 @@ export class Renderer {
     const chiaro = this.sfondo[0] > 0.5 || sfondo === 'bianco';
 
     if (this.mostraSpigoli) {
-      gl.uniform3fv(u.uColor, new Float32Array(chiaro ? [0.15, 0.17, 0.2] : [0.92, 0.94, 0.98]));
+      gl.uniform3fv(u.uColor, chiaro ? this.col.spigoliChiaro : this.col.spigoliScuro);
       gl.uniform1f(u.uOpacity, this.mostraFacce ? 0.85 : 1);
       for (const p of this.parts) {
         if (!p.visibile || !p.edgeBuf) continue;
@@ -491,7 +503,7 @@ export class Renderer {
     }
 
     if (this.mostraBbox) {
-      gl.uniform3fv(u.uColor, new Float32Array([0.95, 0.65, 0.2]));
+      gl.uniform3fv(u.uColor, this.col.bbox);
       gl.uniform1f(u.uOpacity, 0.6);
       for (const p of this.parts) {
         if (!p.visibile) continue;
@@ -515,13 +527,12 @@ export class Renderer {
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]), gl.STATIC_DRAW);
       }
       const l = Math.max(1e-3, camera.distance * 0.12);
-      const scaleM = new Float32Array([l, 0, 0, 0, 0, l, 0, 0, 0, 0, l, 0, 0, 0, 0, 1]);
-      gl.uniformMatrix4fv(u.uModel, false, scaleM);
+      this.assiScala.set([l, 0, 0, 0, 0, l, 0, 0, 0, 0, l, 0, 0, 0, 0, 1]);
+      gl.uniformMatrix4fv(u.uModel, false, this.assiScala);
       gl.uniform1f(u.uOpacity, 0.95);
       bindAttr(gl, a.aPos, this.axisBuf, 3);
-      const colori = [[0.9, 0.3, 0.3], [0.35, 0.8, 0.4], [0.4, 0.55, 0.95]];
       for (let i = 0; i < 3; i++) {
-        gl.uniform3fv(u.uColor, new Float32Array(colori[i]));
+        gl.uniform3fv(u.uColor, this.col.assi[i]);
         gl.drawArrays(gl.LINES, i * 2, 2);
       }
     }
@@ -550,7 +561,7 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.scratchBuf);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
     gl.uniformMatrix4fv(u.uModel, false, this.identity);
-    gl.uniform3fv(u.uColor, new Float32Array(chiaro ? [0.85, 0.35, 0.1] : [1.0, 0.62, 0.25]));
+    gl.uniform3fv(u.uColor, chiaro ? this.col.sezioneChiaro : this.col.sezioneScuro);
     gl.uniform1f(u.uOpacity, 0.9);
     bindAttr(gl, a.aPos, this.scratchBuf, 3);
     gl.drawArrays(gl.LINE_LOOP, 0, 4);
@@ -567,13 +578,13 @@ export class Renderer {
     gl.disable(gl.DEPTH_TEST);
     bindAttr(gl, a.aPos, this.scratchBuf, 3);
     if (pts.length >= 2) {
-      gl.uniform3fv(u.uColor, new Float32Array([1.0, 0.62, 0.16]));
+      gl.uniform3fv(u.uColor, this.col.misuraLinea);
       gl.uniform1f(u.uOpacity, 1);
       gl.drawArrays(gl.LINE_STRIP, 0, pts.length);
     }
     gl.uniform1f(u.uPointSize, 12 * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1f(u.uRound, 1);
-    gl.uniform3fv(u.uColor, new Float32Array([1.0, 0.75, 0.25]));
+    gl.uniform3fv(u.uColor, this.col.misuraPunto);
     gl.drawArrays(gl.POINTS, 0, pts.length);
     gl.uniform1f(u.uRound, 0);
     gl.uniform1f(u.uPointSize, 1);

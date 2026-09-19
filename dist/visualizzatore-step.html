@@ -874,12 +874,16 @@ function avviaWorker() {
 /** Elaborazione senza worker, a passi: l'interfaccia resta reattiva. */
 async function elaboraInPagina(text, nome, tolleranza, mantieni) {
   if (!fallbackModuli) {
-    const [parser, model] = await Promise.all([Promise.resolve(__richiedi('src/step/parser.js')), Promise.resolve(__richiedi('src/step/model.js'))]);
-    fallbackModuli = { parser, model };
+    const [parser, model, esploratore] = await Promise.all([
+      Promise.resolve(__richiedi('src/step/parser.js')),
+      Promise.resolve(__richiedi('src/step/model.js')),
+      Promise.resolve(__richiedi('src/step/esploratore.js')),
+    ]);
+    fallbackModuli = { parser, model, esploratore };
   }
   const file = await fallbackModuli.parser.parseStepAsync(text, (f, l) => progresso(f * 0.35, l));
   fallbackModuli.file = file;
-  fallbackModuli.valueToText = fallbackModuli.parser.valueToText;
+  fallbackModuli.cacheTesto = new Map();
   const m = await fallbackModuli.model.buildModelAsync(file, {
     tolerance: tolleranza,
     onProgress: (f, l) => progresso(0.35 + f * 0.65, l),
@@ -1072,43 +1076,39 @@ function inquadra(bbox) {
   needsRender = true;
 }
 
+/**
+ * Unico punto che modifica la selezione: aggiorna lo stato, il renderer e i
+ * pannelli. `sel` = null oppure { parte, faccia = -1, punto, normale, daClic }.
+ */
+function impostaSelezione(sel) {
+  stato.selezione = sel;
+  stato.parteSelezionata = sel ? sel.parte : -1;
+  stato.facciaSelezionata = sel && sel.faccia > 0 ? sel.faccia : -1;
+  renderer.parteSelezionata = stato.parteSelezionata;
+  renderer.selezione = stato.facciaSelezionata;
+  aggiornaPannelli();
+  needsRender = true;
+}
+
 const azioni = {
-  selezionaParte(i, opts = {}) {
+  selezionaParte(i) {
     if (!stato.model || !stato.model.parti[i]) return;
-    stato.parteSelezionata = i;
-    stato.facciaSelezionata = -1;
-    renderer.selezione = -1;
-    renderer.parteSelezionata = i;
     const p = stato.model.parti[i];
-    stato.selezione = { parte: i, faccia: -1, punto: renderer.parts[i] ? renderer.parts[i].centroMondo : p.centroide };
-    if (!opts.senzaPannelli) aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione({ parte: i, faccia: -1, punto: renderer.parts[i] ? renderer.parts[i].centroMondo : p.centroide });
   },
   selezionaNodo(indici) {
     if (indici.length) azioni.selezionaParte(indici[0]);
   },
   selezionaFaccia(parte, faccia) {
-    stato.parteSelezionata = parte;
-    stato.facciaSelezionata = faccia;
-    renderer.selezione = faccia;
-    renderer.parteSelezionata = parte;
     const bb = ingombroFaccia(parte, faccia);
-    stato.selezione = {
+    impostaSelezione({
       parte,
       faccia,
       punto: bb ? [(bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2] : null,
-    };
-    aggiornaPannelli();
-    needsRender = true;
+    });
   },
   deseleziona() {
-    stato.selezione = null;
-    stato.facciaSelezionata = -1;
-    stato.parteSelezionata = -1;
-    renderer.selezione = -1;
-    renderer.parteSelezionata = -1;
-    aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione(null);
   },
   inquadraParti(indici) {
     inquadra(renderer.ingombroVisibile(indici));
@@ -1233,55 +1233,14 @@ const azioni = {
   },
 };
 
-/** Ricerca entità senza worker (usa i moduli caricati nella pagina). */
+/** Ricerca entità senza worker (stesso modulo usato dal worker). */
 function cercaInPagina({ query, tipo, id }) {
   const f = fallbackModuli && fallbackModuli.file;
   if (!f) return;
-  const testo = (ent) => {
-    const part = (t, p) => `${t}(${p.map(fallbackModuli.valueToText).join(',')})`;
-    return ent.complex
-      ? `#${ent.id}=(${ent.complex.map((p) => part(p.type, p.params)).join('')});`
-      : `#${ent.id}=${part(ent.type, ent.params)};`;
-  };
-  if (id != null) {
-    const ent = f.entities.get(id);
-    if (!ent) return gestisciMessaggio({ type: 'entity', data: null, richiesta: id });
-    const refs = [];
-    const walk = (v) => {
-      if (v == null) return;
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (typeof v === 'object') {
-        if ('ref' in v) refs.push(v.ref);
-        else if ('typed' in v) walk(v.value);
-      }
-    };
-    walk(ent.complex ? ent.complex.map((p) => p.params) : ent.params);
-    return gestisciMessaggio({
-      type: 'entity',
-      data: {
-        id: ent.id,
-        tipi: ent.types,
-        testo: testo(ent),
-        riferimenti: [...new Set(refs)],
-        citataDa: f.referrers(ent.id).map((e) => e.id),
-      },
-    });
-  }
-  const q = String(tipo || query || '').trim().toUpperCase();
-  const risultati = [];
-  let totale = 0;
-  const limite = 300;
-  if (/^#?\d+$/.test(q)) {
-    const ent = f.entities.get(Number(q.replace('#', '')));
-    if (ent) risultati.push({ id: ent.id, tipi: ent.types, testo: testo(ent) });
-    totale = risultati.length;
-  } else if (q) {
-    const perTipo = tipo ? f.ofType(q) : [...f.entities.values()].filter((e) => e.types.some((t) => t.includes(q)));
-    let lista = perTipo;
-    if (!lista.length && !tipo) lista = [...f.entities.values()].filter((e) => testo(e).toUpperCase().includes(q));
-    totale = lista.length;
-    for (const ent of lista.slice(0, limite)) risultati.push({ id: ent.id, tipi: ent.types, testo: testo(ent).slice(0, 400) });
-  }
+  const E = fallbackModuli.esploratore;
+  const cache = fallbackModuli.cacheTesto;
+  if (id != null) return gestisciMessaggio({ type: 'entity', data: E.infoEntita(f, id, cache), richiesta: id });
+  const { risultati, totale } = tipo ? E.entitaPerTipo(f, tipo, cache) : E.cercaEntita(f, query, cache);
   gestisciMessaggio({ type: 'search', risultati, query: tipo || query, totale });
 }
 
@@ -1526,17 +1485,7 @@ function collegaInterazione() {
       aggiornaMisura();
       return;
     }
-    if (!hit) {
-      azioni.deseleziona();
-      return;
-    }
-    stato.parteSelezionata = hit.parte;
-    stato.facciaSelezionata = hit.faccia;
-    renderer.selezione = hit.faccia;
-    renderer.parteSelezionata = hit.parte;
-    stato.selezione = { ...hit, daClic: true };
-    aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione(hit ? { ...hit, daClic: true } : null);
   };
   canvas.addEventListener('pointerup', fine);
   canvas.addEventListener('pointercancel', fine);
@@ -2227,8 +2176,8 @@ __definisci('src/viewer/renderer.js', (esporta, __richiedi) => {
  *
  * Disegna le parti tassellate con illuminazione a due lati, gli spigoli del
  * modello, la bounding box, gli assi, il piano di sezione e gli elementi di
- * misura. Gli uniform e le matrici per parte sono in cache: a ogni fotogramma
- * non si alloca nulla.
+ * misura. Gli uniform, i colori fissi e le matrici per parte sono in cache:
+ * nel disegno ordinario non si alloca nulla per fotogramma.
  */
 
 const { identity, invert, multiply, transpose } = __richiedi('src/viewer/mat4.js');
@@ -2423,6 +2372,18 @@ class Renderer {
     this.scratchBuf = gl.createBuffer();
     this.axisBuf = null;
     this.contestoPerso = false;
+    // colori fissi, creati una volta: niente allocazioni per fotogramma
+    this.col = {
+      spigoliScuro: new Float32Array([0.92, 0.94, 0.98]),
+      spigoliChiaro: new Float32Array([0.15, 0.17, 0.2]),
+      bbox: new Float32Array([0.95, 0.65, 0.2]),
+      sezioneScuro: new Float32Array([1.0, 0.62, 0.25]),
+      sezioneChiaro: new Float32Array([0.85, 0.35, 0.1]),
+      misuraLinea: new Float32Array([1.0, 0.62, 0.16]),
+      misuraPunto: new Float32Array([1.0, 0.75, 0.25]),
+      assi: [new Float32Array([0.9, 0.3, 0.3]), new Float32Array([0.35, 0.8, 0.4]), new Float32Array([0.4, 0.55, 0.95])],
+    };
+    this.assiScala = new Float32Array(16);
     this.onContesto = null; // callback (stato: 'perso'|'ripristinato')
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
@@ -2704,7 +2665,7 @@ class Renderer {
     const chiaro = this.sfondo[0] > 0.5 || sfondo === 'bianco';
 
     if (this.mostraSpigoli) {
-      gl.uniform3fv(u.uColor, new Float32Array(chiaro ? [0.15, 0.17, 0.2] : [0.92, 0.94, 0.98]));
+      gl.uniform3fv(u.uColor, chiaro ? this.col.spigoliChiaro : this.col.spigoliScuro);
       gl.uniform1f(u.uOpacity, this.mostraFacce ? 0.85 : 1);
       for (const p of this.parts) {
         if (!p.visibile || !p.edgeBuf) continue;
@@ -2715,7 +2676,7 @@ class Renderer {
     }
 
     if (this.mostraBbox) {
-      gl.uniform3fv(u.uColor, new Float32Array([0.95, 0.65, 0.2]));
+      gl.uniform3fv(u.uColor, this.col.bbox);
       gl.uniform1f(u.uOpacity, 0.6);
       for (const p of this.parts) {
         if (!p.visibile) continue;
@@ -2739,13 +2700,12 @@ class Renderer {
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]), gl.STATIC_DRAW);
       }
       const l = Math.max(1e-3, camera.distance * 0.12);
-      const scaleM = new Float32Array([l, 0, 0, 0, 0, l, 0, 0, 0, 0, l, 0, 0, 0, 0, 1]);
-      gl.uniformMatrix4fv(u.uModel, false, scaleM);
+      this.assiScala.set([l, 0, 0, 0, 0, l, 0, 0, 0, 0, l, 0, 0, 0, 0, 1]);
+      gl.uniformMatrix4fv(u.uModel, false, this.assiScala);
       gl.uniform1f(u.uOpacity, 0.95);
       bindAttr(gl, a.aPos, this.axisBuf, 3);
-      const colori = [[0.9, 0.3, 0.3], [0.35, 0.8, 0.4], [0.4, 0.55, 0.95]];
       for (let i = 0; i < 3; i++) {
-        gl.uniform3fv(u.uColor, new Float32Array(colori[i]));
+        gl.uniform3fv(u.uColor, this.col.assi[i]);
         gl.drawArrays(gl.LINES, i * 2, 2);
       }
     }
@@ -2774,7 +2734,7 @@ class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.scratchBuf);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
     gl.uniformMatrix4fv(u.uModel, false, this.identity);
-    gl.uniform3fv(u.uColor, new Float32Array(chiaro ? [0.85, 0.35, 0.1] : [1.0, 0.62, 0.25]));
+    gl.uniform3fv(u.uColor, chiaro ? this.col.sezioneChiaro : this.col.sezioneScuro);
     gl.uniform1f(u.uOpacity, 0.9);
     bindAttr(gl, a.aPos, this.scratchBuf, 3);
     gl.drawArrays(gl.LINE_LOOP, 0, 4);
@@ -2791,13 +2751,13 @@ class Renderer {
     gl.disable(gl.DEPTH_TEST);
     bindAttr(gl, a.aPos, this.scratchBuf, 3);
     if (pts.length >= 2) {
-      gl.uniform3fv(u.uColor, new Float32Array([1.0, 0.62, 0.16]));
+      gl.uniform3fv(u.uColor, this.col.misuraLinea);
       gl.uniform1f(u.uOpacity, 1);
       gl.drawArrays(gl.LINE_STRIP, 0, pts.length);
     }
     gl.uniform1f(u.uPointSize, 12 * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1f(u.uRound, 1);
-    gl.uniform3fv(u.uColor, new Float32Array([1.0, 0.75, 0.25]));
+    gl.uniform3fv(u.uColor, this.col.misuraPunto);
     gl.drawArrays(gl.POINTS, 0, pts.length);
     gl.uniform1f(u.uRound, 0);
     gl.uniform1f(u.uPointSize, 1);
@@ -6598,18 +6558,18 @@ __definisci('src/step/tessellate.js', (esporta, __richiedi) => {
 /**
  * Tassellazione BREP: da ADVANCED_FACE / FACE_SURFACE a mesh triangolari.
  *
- * Strategia per ogni faccia:
- *  1. campiona i bordi (edge loop) in 3D con controllo dell'errore di corda;
- *  2. proietta i punti nello spazio parametrico (u,v) della superficie,
- *     srotolando le cuciture sulle superfici periodiche;
- *  3. triangola il poligono UV (contorno esterno + eventuali fori) per
- *     ear clipping;
- *  4. suddivide i triangoli finche' lo scostamento dalla superficie rientra
- *     nella tolleranza (solo superfici curve);
- *  5. calcola normali analitiche, area e contributo al volume.
- *
- * Le facce periodiche complete (cilindri, sfere, tori senza cucitura
- * esplicita) usano una tassellazione a griglia sull'intero periodo.
+ * Per ogni faccia:
+ *  1. i bordi (edge loop) sono campionati in 3D con errore di corda
+ *     controllato; VERTEX_LOOP -> apici, cuciture -> anelli separati;
+ *  2. i punti sono proiettati nello spazio parametrico (u,v), riscalato con
+ *     la metrica locale e srotolato sulle superfici periodiche;
+ *  3. facce rigate periodiche (cilindri, coni, estrusioni, rivoluzioni) con
+ *     due anelli: cucitura diretta fra i bordi (loft); con un apice: ventaglio;
+ *     altre facce periodiche intere (sfere, tori): griglia con intervallo v
+ *     scelto dall'orientamento del contorno;
+ *  4. tutte le altre: ear clipping per qualita' + scambi di Delaunay, poi
+ *     suddivisione uniforme (bordi sulle corde condivise: mesh a tenuta);
+ *  5. normali analitiche, verso dei triangoli allineato, area della faccia.
  */
 
 const { buildCurve, buildSurface, closestParam, cross, dist, dot, len, metricScales, projectSequence, readPoint, scaledSurface, sub } = __richiedi('src/step/geometry.js');
@@ -6795,7 +6755,7 @@ function faceRings(file, faceEnt, tol) {
     } else gruppi = [segmenti];
 
     for (const gruppo of gruppi) {
-      let pts = [];
+      const pts = [];
       const edgeRefs = [];
       for (const sg of gruppo) {
         edgeRefs.push(sg.id);
@@ -6930,9 +6890,9 @@ function bridgeHoles(outer, holes) {
     const insert = [...rotated, rotated[0], a];
     ring = ring.slice(0, best.j + 1).concat(insert, ring.slice(best.j + 1));
     remaining.splice(best.hi, 1);
-    if (blocked) {
-      // ponte non ideale: la triangolazione potrebbe degradare, ma resta chiusa
-    }
+    // se il ponte interseca altri lati la triangolazione puo' degradare ma
+    // resta chiusa: l'ear clipping ha il ripiego per i casi difficili
+    void blocked;
   }
   return ring;
 }
@@ -7420,8 +7380,8 @@ function intervalloV(surf, anelli, apici, flip) {
 /** Tassella una faccia periodica con una griglia sul periodo e sull'intervallo v scelto. */
 function tessellateBand(surf, anelli, apici, tol, flip, mesh, faceId) {
   const uPeriod = surf.uPeriod;
-  let [v0, v1] = intervalloV(surf, anelli, apici, flip);
-  if (!(v1 > v0)) v1 = v0 + 1e-6;
+  const [v0, vFine] = intervalloV(surf, anelli, apici, flip);
+  const v1 = vFine > v0 ? vFine : v0 + 1e-6;
   const u0 = 0;
   const u1 = uPeriod || 1;
   // numero di suddivisioni dalla tolleranza
@@ -7798,6 +7758,97 @@ function contaBordiAperti(positions, indices, tolleranza = 1e-4) {
 }
 
 Object.assign(esporta, { appendAll, sampleCurve, faceRings, earClip, tessellateFace, collectFaces, gusciChiusi, meshVolume, meshCentroid, contaBordiAperti, MeshBuilder, FACE_TYPES });
+});
+
+__definisci('src/step/esploratore.js', (esporta, __richiedi) => {
+/**
+ * Esploratore delle entita': testo ricostruito, riferimenti, ricerca.
+ * Senza DOM: lo usano il worker e, nella versione a file unico, la pagina.
+ */
+
+const { valueToText } = __richiedi('src/step/parser.js');
+
+/** Testo STEP di un'entita' (con cache opzionale: Map id -> testo). */
+function testoEntita(ent, cache = null) {
+  if (cache) {
+    const t = cache.get(ent.id);
+    if (t !== undefined) return t;
+  }
+  const part = (p) => `${p.type}(${p.params.map(valueToText).join(',')})`;
+  const testo = ent.complex
+    ? `#${ent.id}=(${ent.complex.map(part).join('')});`
+    : `#${ent.id}=${part({ type: ent.type, params: ent.params })};`;
+  if (cache) cache.set(ent.id, testo);
+  return testo;
+}
+
+function raccogliRiferimenti(value, out = []) {
+  if (value == null) return out;
+  if (Array.isArray(value)) {
+    for (const v of value) raccogliRiferimenti(v, out);
+    return out;
+  }
+  if (typeof value === 'object') {
+    if ('ref' in value) out.push(value.ref);
+    else if ('typed' in value) raccogliRiferimenti(value.value, out);
+  }
+  return out;
+}
+
+/** Scheda di un'entita': { id, tipi, testo, riferimenti, citataDa } oppure null. */
+function infoEntita(file, id, cache = null, limite = 400) {
+  const ent = file.entities.get(id);
+  if (!ent) return null;
+  const params = ent.complex ? ent.complex.map((p) => p.params).flat() : ent.params;
+  return {
+    id: ent.id,
+    tipi: ent.types,
+    testo: testoEntita(ent, cache),
+    riferimenti: [...new Set(raccogliRiferimenti(params))].slice(0, limite),
+    citataDa: file.referrers(ent.id).map((e) => e.id).slice(0, limite),
+  };
+}
+
+const riga = (ent, cache) => ({ id: ent.id, tipi: ent.types, testo: testoEntita(ent, cache).slice(0, 400) });
+
+/**
+ * Ricerca per #id, per tipo (sottostringa) o, in mancanza di tipi
+ * corrispondenti, per testo. Restituisce { risultati, totale }.
+ */
+function cercaEntita(file, query, cache = null, limite = 300) {
+  const q = String(query || '').trim().toUpperCase();
+  const risultati = [];
+  let totale = 0;
+  if (!q) return { risultati, totale };
+  if (/^#?\d+$/.test(q)) {
+    const ent = file.entities.get(Number(q.replace('#', '')));
+    if (ent) risultati.push(riga(ent, cache));
+    return { risultati, totale: risultati.length };
+  }
+  for (const ent of file.entities.values()) {
+    if (ent.types.some((t) => t.includes(q))) {
+      totale++;
+      if (risultati.length < limite) risultati.push(riga(ent, cache));
+    }
+  }
+  if (!totale) {
+    for (const ent of file.entities.values()) {
+      if (testoEntita(ent, cache).toUpperCase().includes(q)) {
+        totale++;
+        if (risultati.length < limite) risultati.push(riga(ent, cache));
+      }
+    }
+  }
+  return { risultati, totale };
+}
+
+/** Tutte le entita' di un tipo esatto. */
+function entitaPerTipo(file, tipo, cache = null, limite = 500) {
+  const tutti = file.ofType(String(tipo || '').toUpperCase());
+  return { risultati: tutti.slice(0, limite).map((e) => riga(e, cache)), totale: tutti.length };
+}
+
+Object.assign(esporta, { testoEntita, infoEntita, cercaEntita, entitaPerTipo });
 });
 
 __richiedi('src/ui/app.js').avvia();

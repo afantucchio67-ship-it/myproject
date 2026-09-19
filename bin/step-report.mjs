@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { parseStep } from '../src/step/parser.js';
+import { isStepText, parseStep } from '../src/step/parser.js';
 import { buildModel } from '../src/step/model.js';
 import { entitaCSV, facceCSV, partiCSV, reportJSON } from '../src/ui/exporters.js';
 
@@ -58,6 +58,17 @@ if (opzioni.csv && !['facce', 'parti', 'entita'].includes(opzioni.csv)) {
   process.exit(1);
 }
 
+/** Stessa decodifica dell'interfaccia: UTF-8 rigoroso, altrimenti Windows-1252; via il BOM. */
+function decodifica(buffer) {
+  let bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
 const fmt = (v, d = 2) =>
   typeof v === 'number' ? v.toLocaleString('it-IT', { minimumFractionDigits: d, maximumFractionDigits: d }) : String(v);
 
@@ -65,14 +76,26 @@ let errori = 0;
 for (const percorso of opzioni.files) {
   let testo;
   try {
-    testo = readFileSync(percorso, 'latin1');
+    testo = decodifica(readFileSync(percorso));
   } catch (err) {
     console.error(`${percorso}: impossibile leggere il file (${err.code || err.message})`);
     errori++;
     continue;
   }
-  const file = parseStep(testo);
-  const model = buildModel(file, { tolerance: opzioni.tolleranza });
+  if (!isStepText(testo)) {
+    console.error(`${percorso}: non è un file STEP (manca l'intestazione ISO-10303-21)`);
+    errori++;
+    continue;
+  }
+  let model;
+  try {
+    const file = parseStep(testo);
+    model = buildModel(file, { tolerance: opzioni.tolleranza });
+  } catch (err) {
+    console.error(`${percorso}: errore durante l'elaborazione: ${err.message}`);
+    errori++;
+    continue;
+  }
   model.nomeFileCaricato = basename(percorso);
 
   if (opzioni.json) {

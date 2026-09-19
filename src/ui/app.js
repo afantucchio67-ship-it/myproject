@@ -174,12 +174,16 @@ function avviaWorker() {
 /** Elaborazione senza worker, a passi: l'interfaccia resta reattiva. */
 async function elaboraInPagina(text, nome, tolleranza, mantieni) {
   if (!fallbackModuli) {
-    const [parser, model] = await Promise.all([import('../step/parser.js'), import('../step/model.js')]);
-    fallbackModuli = { parser, model };
+    const [parser, model, esploratore] = await Promise.all([
+      import('../step/parser.js'),
+      import('../step/model.js'),
+      import('../step/esploratore.js'),
+    ]);
+    fallbackModuli = { parser, model, esploratore };
   }
   const file = await fallbackModuli.parser.parseStepAsync(text, (f, l) => progresso(f * 0.35, l));
   fallbackModuli.file = file;
-  fallbackModuli.valueToText = fallbackModuli.parser.valueToText;
+  fallbackModuli.cacheTesto = new Map();
   const m = await fallbackModuli.model.buildModelAsync(file, {
     tolerance: tolleranza,
     onProgress: (f, l) => progresso(0.35 + f * 0.65, l),
@@ -372,43 +376,39 @@ function inquadra(bbox) {
   needsRender = true;
 }
 
+/**
+ * Unico punto che modifica la selezione: aggiorna lo stato, il renderer e i
+ * pannelli. `sel` = null oppure { parte, faccia = -1, punto, normale, daClic }.
+ */
+function impostaSelezione(sel) {
+  stato.selezione = sel;
+  stato.parteSelezionata = sel ? sel.parte : -1;
+  stato.facciaSelezionata = sel && sel.faccia > 0 ? sel.faccia : -1;
+  renderer.parteSelezionata = stato.parteSelezionata;
+  renderer.selezione = stato.facciaSelezionata;
+  aggiornaPannelli();
+  needsRender = true;
+}
+
 const azioni = {
-  selezionaParte(i, opts = {}) {
+  selezionaParte(i) {
     if (!stato.model || !stato.model.parti[i]) return;
-    stato.parteSelezionata = i;
-    stato.facciaSelezionata = -1;
-    renderer.selezione = -1;
-    renderer.parteSelezionata = i;
     const p = stato.model.parti[i];
-    stato.selezione = { parte: i, faccia: -1, punto: renderer.parts[i] ? renderer.parts[i].centroMondo : p.centroide };
-    if (!opts.senzaPannelli) aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione({ parte: i, faccia: -1, punto: renderer.parts[i] ? renderer.parts[i].centroMondo : p.centroide });
   },
   selezionaNodo(indici) {
     if (indici.length) azioni.selezionaParte(indici[0]);
   },
   selezionaFaccia(parte, faccia) {
-    stato.parteSelezionata = parte;
-    stato.facciaSelezionata = faccia;
-    renderer.selezione = faccia;
-    renderer.parteSelezionata = parte;
     const bb = ingombroFaccia(parte, faccia);
-    stato.selezione = {
+    impostaSelezione({
       parte,
       faccia,
       punto: bb ? [(bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2] : null,
-    };
-    aggiornaPannelli();
-    needsRender = true;
+    });
   },
   deseleziona() {
-    stato.selezione = null;
-    stato.facciaSelezionata = -1;
-    stato.parteSelezionata = -1;
-    renderer.selezione = -1;
-    renderer.parteSelezionata = -1;
-    aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione(null);
   },
   inquadraParti(indici) {
     inquadra(renderer.ingombroVisibile(indici));
@@ -533,55 +533,14 @@ const azioni = {
   },
 };
 
-/** Ricerca entità senza worker (usa i moduli caricati nella pagina). */
+/** Ricerca entità senza worker (stesso modulo usato dal worker). */
 function cercaInPagina({ query, tipo, id }) {
   const f = fallbackModuli && fallbackModuli.file;
   if (!f) return;
-  const testo = (ent) => {
-    const part = (t, p) => `${t}(${p.map(fallbackModuli.valueToText).join(',')})`;
-    return ent.complex
-      ? `#${ent.id}=(${ent.complex.map((p) => part(p.type, p.params)).join('')});`
-      : `#${ent.id}=${part(ent.type, ent.params)};`;
-  };
-  if (id != null) {
-    const ent = f.entities.get(id);
-    if (!ent) return gestisciMessaggio({ type: 'entity', data: null, richiesta: id });
-    const refs = [];
-    const walk = (v) => {
-      if (v == null) return;
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (typeof v === 'object') {
-        if ('ref' in v) refs.push(v.ref);
-        else if ('typed' in v) walk(v.value);
-      }
-    };
-    walk(ent.complex ? ent.complex.map((p) => p.params) : ent.params);
-    return gestisciMessaggio({
-      type: 'entity',
-      data: {
-        id: ent.id,
-        tipi: ent.types,
-        testo: testo(ent),
-        riferimenti: [...new Set(refs)],
-        citataDa: f.referrers(ent.id).map((e) => e.id),
-      },
-    });
-  }
-  const q = String(tipo || query || '').trim().toUpperCase();
-  const risultati = [];
-  let totale = 0;
-  const limite = 300;
-  if (/^#?\d+$/.test(q)) {
-    const ent = f.entities.get(Number(q.replace('#', '')));
-    if (ent) risultati.push({ id: ent.id, tipi: ent.types, testo: testo(ent) });
-    totale = risultati.length;
-  } else if (q) {
-    const perTipo = tipo ? f.ofType(q) : [...f.entities.values()].filter((e) => e.types.some((t) => t.includes(q)));
-    let lista = perTipo;
-    if (!lista.length && !tipo) lista = [...f.entities.values()].filter((e) => testo(e).toUpperCase().includes(q));
-    totale = lista.length;
-    for (const ent of lista.slice(0, limite)) risultati.push({ id: ent.id, tipi: ent.types, testo: testo(ent).slice(0, 400) });
-  }
+  const E = fallbackModuli.esploratore;
+  const cache = fallbackModuli.cacheTesto;
+  if (id != null) return gestisciMessaggio({ type: 'entity', data: E.infoEntita(f, id, cache), richiesta: id });
+  const { risultati, totale } = tipo ? E.entitaPerTipo(f, tipo, cache) : E.cercaEntita(f, query, cache);
   gestisciMessaggio({ type: 'search', risultati, query: tipo || query, totale });
 }
 
@@ -826,17 +785,7 @@ function collegaInterazione() {
       aggiornaMisura();
       return;
     }
-    if (!hit) {
-      azioni.deseleziona();
-      return;
-    }
-    stato.parteSelezionata = hit.parte;
-    stato.facciaSelezionata = hit.faccia;
-    renderer.selezione = hit.faccia;
-    renderer.parteSelezionata = hit.parte;
-    stato.selezione = { ...hit, daClic: true };
-    aggiornaPannelli();
-    needsRender = true;
+    impostaSelezione(hit ? { ...hit, daClic: true } : null);
   };
   canvas.addEventListener('pointerup', fine);
   canvas.addEventListener('pointercancel', fine);

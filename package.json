@@ -7,12 +7,10 @@
   "scripts": {
     "start": "node server.mjs 8080",
     "report": "node bin/step-report.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test",
     "lint": "eslint src bin test build.mjs server.mjs",
-    "build": "node build.mjs"
-  },
-  "bin": {
-    "step-report": "bin/step-report.mjs"
+    "build": "node build.mjs",
+    "start:rete": "node server.mjs 8080 --rete"
   },
   "engines": {
     "node": ">=18"
