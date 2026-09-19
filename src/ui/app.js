@@ -50,6 +50,7 @@ const stato = {
   tolleranza: 0.1,
   tema: 'scuro',
   caricamento: false,
+  notaApertura: '', // avviso da ripetere nel messaggio finale (es. piu' file selezionati)
 };
 
 let renderer;
@@ -78,7 +79,8 @@ function mostraCaricamento(attivo, frazione = 0, etichetta = '') {
 }
 
 function progresso(frazione, etichetta) {
-  mostraCaricamento(frazione < 1, frazione, etichetta);
+  // la barra si chiude solo all'arrivo del modello (o di un errore)
+  mostraCaricamento(true, Math.min(frazione, 0.99), etichetta);
 }
 
 const um = () => (stato.model && stato.model.units.simbolo) || 'mm';
@@ -193,6 +195,7 @@ async function elaboraInPagina(text, nome, tolleranza, mantieni) {
 }
 
 let attesaRitassellazione = false;
+let ritassellazioneInSospeso = false; // tolleranza cambiata durante un'elaborazione
 let ultimaRichiesta = null; // {text, nome, tolleranza}: per ripetere il lavoro se il worker cade
 
 function gestisciMessaggio(msg) {
@@ -203,13 +206,21 @@ function gestisciMessaggio(msg) {
   }
   if (msg.type === 'error') {
     mostraCaricamento(false);
+    attesaRitassellazione = false;
+    ritassellazioneInSospeso = false;
+    if (!stato.model) $('#stato-vuoto').hidden = false;
     log('Errore durante la lettura: ' + msg.messaggio, 'errore');
     return;
   }
   if (msg.type === 'model') {
     mostraCaricamento(false);
-    caricaModello(msg.model, { mantieni: msg.mantieni || attesaRitassellazione });
+    const mantieni = msg.mantieni === true || attesaRitassellazione;
     attesaRitassellazione = false;
+    caricaModello(msg.model, { mantieni });
+    if (ritassellazioneInSospeso) {
+      ritassellazioneInSospeso = false;
+      if (msg.model.tolleranza !== stato.tolleranza) ritassella();
+    }
     return;
   }
   if (msg.type === 'entity') {
@@ -233,11 +244,14 @@ function apriFiles(files) {
   if (!lista.length) return;
   const stp = lista.filter((f) => /\.(stp|step|p21)$/i.test(f.name));
   const file = stp[0] || lista[0];
-  if (lista.length > 1) {
-    log(`Hai selezionato ${lista.length} file: apro «${file.name}». Il visualizzatore mostra un file alla volta.`, 'attenzione');
-  }
+  stato.notaApertura = lista.length > 1
+    ? `hai selezionato ${lista.length} file, aperto solo «${file.name}» (il visualizzatore mostra un file alla volta)`
+    : '';
+  if (stato.notaApertura) log(`Hai selezionato ${lista.length} file: apro «${file.name}». Il visualizzatore mostra un file alla volta.`, 'attenzione');
   apriFile(file);
 }
+
+let dimensioneFile = 0;
 
 function apriFile(file) {
   if (stato.caricamento) {
@@ -252,10 +266,10 @@ function apriFile(file) {
       mostraCaricamento(false);
       return;
     }
-    stato.nomeFile = file.name;
-    $('#nome-file').textContent = file.name;
-    $('#nome-file').title = `${file.name} · ${kb(file.size)}`;
-    document.title = `${file.name} — Visualizzatore STEP`;
+    // il nome in testata cambia solo quando il nuovo modello e' pronto (caricaModello)
+    attesaRitassellazione = false;
+    ritassellazioneInSospeso = false;
+    dimensioneFile = file.size;
     ultimaRichiesta = { text, nome: file.name, tolleranza: stato.tolleranza };
     if (worker) {
       worker.postMessage({ type: 'load', text, nome: file.name, tolleranza: stato.tolleranza });
@@ -292,6 +306,12 @@ function caricaModello(model, opts = {}) {
   const precedente = stato.model;
   const mantieni = opts.mantieni && precedente && precedente.parti.length === model.parti.length;
   stato.model = model;
+  if (model.nomeFileCaricato) {
+    stato.nomeFile = model.nomeFileCaricato;
+    $('#nome-file').textContent = stato.nomeFile;
+    $('#nome-file').title = dimensioneFile ? `${stato.nomeFile} · ${kb(dimensioneFile)}` : stato.nomeFile;
+    document.title = `${stato.nomeFile} — Visualizzatore STEP`;
+  }
   model.parti.forEach((p, i) => {
     const prima = mantieni ? precedente.parti[i] : null;
     p.visibile = prima ? prima.visibile !== false : true;
@@ -316,28 +336,39 @@ function caricaModello(model, opts = {}) {
     stato.ricercaEntita = '';
     stato.totaleRisultati = 0;
     $('#esplosione').value = '0';
+    $('#esplosione-valore').textContent = '';
     renderer.setEsplosione(0);
     const bb = model.bbox;
     camera.fit(bb, renderer.canvas.clientWidth / Math.max(1, renderer.canvas.clientHeight));
     $('#sezione-attiva').checked = false;
     $('#sezione-posizione').value = '0';
+    $('#sezione-inverti').classList.remove('attivo');
+    $('#suggerimento').hidden = true;
+    renderer.canvas.style.cursor = 'default';
   } else {
     // la ritassellazione conserva selezione e misure
     renderer.selezione = stato.facciaSelezionata;
     renderer.parteSelezionata = stato.parteSelezionata;
     renderer.misura.punti = stato.misura.punti.slice();
   }
+  // l'esplosione ha senso solo con almeno due parti
+  const esplosione = $('#esplosione');
+  esplosione.disabled = model.parti.length < 2;
+  esplosione.title = esplosione.disabled ? 'serve un assieme con almeno due parti' : 'allontana le parti dal centro';
   impostaSezione();
   aggiornaPannelli();
   aggiornaBarraStato();
   $('#stato-vuoto').hidden = true;
   needsRender = true;
   const n = model.parti.length;
+  const nota = stato.notaApertura ? ` · ${stato.notaApertura}` : '';
+  stato.notaApertura = '';
   if (!n) {
-    log('Nessuna geometria solida trovata: il file contiene solo dati (consulta le schede Dati ed Entità).', 'attenzione');
+    log('Nessuna geometria solida trovata: il file contiene solo dati (consulta le schede Dati ed Entità).' + nota, 'attenzione');
   } else {
+    const diag = model.diagnostics.length;
     log(`${stato.nomeFile}: ${intero(model.statistiche.entita)} entità, ${n} part${n === 1 ? 'e' : 'i'}, ${intero(model.statistiche.triangoli)} triangoli` +
-      (model.diagnostics.length ? ` · ${model.diagnostics.length} segnalazioni in Diagnostica` : ''), 'ok');
+      (diag ? ` · ${diag} segnalazion${diag === 1 ? 'e' : 'i'} in Diagnostica` : '') + nota, nota ? 'attenzione' : 'ok');
   }
 }
 
@@ -433,40 +464,35 @@ const azioni = {
   visibilita(i, visibile) {
     stato.model.parti[i].visibile = visibile;
     renderer.setVisibilita(i, visibile);
-    aggiornaPannelli();
-    needsRender = true;
+    dopoVisibilita();
   },
   visibilitaMultipla(indici, visibile) {
     for (const i of indici) {
       stato.model.parti[i].visibile = visibile;
       renderer.setVisibilita(i, visibile);
     }
-    aggiornaPannelli();
-    needsRender = true;
+    dopoVisibilita();
   },
   isola(i) {
     stato.model.parti.forEach((p, k) => {
       p.visibile = k === i;
       renderer.setVisibilita(k, k === i);
     });
-    aggiornaPannelli();
-    needsRender = true;
+    dopoVisibilita();
   },
   tuttoVisibile(v) {
     stato.model.parti.forEach((p, k) => {
       p.visibile = v;
       renderer.setVisibilita(k, v);
     });
-    aggiornaPannelli();
-    needsRender = true;
+    dopoVisibilita();
   },
   inverti() {
     stato.model.parti.forEach((p, k) => {
       p.visibile = p.visibile === false;
       renderer.setVisibilita(k, p.visibile);
     });
-    aggiornaPannelli();
-    needsRender = true;
+    dopoVisibilita();
   },
   colore(i, rgb) {
     renderer.setColore(i, rgb);
@@ -534,6 +560,15 @@ const azioni = {
   },
 };
 
+/** Dopo un cambio di visibilita': una parte selezionata ma nascosta viene deselezionata. */
+function dopoVisibilita() {
+  const sel = stato.parteSelezionata;
+  if (sel >= 0 && stato.model.parti[sel] && stato.model.parti[sel].visibile === false) {
+    impostaSelezione(null); // aggiorna gia' i pannelli
+  } else aggiornaPannelli();
+  needsRender = true;
+}
+
 /** Ricerca entità senza worker (stesso modulo usato dal worker). */
 function cercaInPagina({ query, tipo, id }) {
   const f = fallbackModuli && fallbackModuli.file;
@@ -564,7 +599,7 @@ function aggiornaPannelli() {
     dati: () => pannelloDati(m),
     geometria: () => pannelloGeometria(m, stato, azioni),
     entita: () => pannelloEntita(m, stato, azioni),
-    diagnostica: () => pannelloDiagnostica(m),
+    diagnostica: () => pannelloDiagnostica(m, stato, azioni),
   };
   cont.appendChild((pannelli[stato.schedaAttiva] || pannelli.struttura)());
   cont.scrollTop = scroll;
@@ -599,8 +634,9 @@ function aggiornaBarraStato() {
     el.textContent = '';
     return;
   }
+  const n = m.parti.length;
   el.textContent =
-    `${um()} · ${intero(m.statistiche.entita)} entità · ${m.parti.length} parti · ${intero(m.statistiche.triangoli)} triangoli · ` +
+    `${um()} · ${intero(m.statistiche.entita)} entità · ${n} part${n === 1 ? 'e' : 'i'} · ${intero(m.statistiche.triangoli)} triangoli · ` +
     `ingombro ${m.bbox.size.map((x) => fmt(x, 1)).join(' × ')} ${um()}`;
 }
 
@@ -626,14 +662,67 @@ function aggiornaMisura() {
   }
   const [a, b] = pts;
   const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-  const dist = Math.hypot(...d);
-  const testo = `distanza ${fmt(dist, 3)} ${um()} · ΔX ${fmt(d[0], 3)} · ΔY ${fmt(d[1], 3)} · ΔZ ${fmt(d[2], 3)}`;
+  const esplosa = renderer.esplosione > 0;
   box.replaceChildren(
-    h('span.misura-valore', `${fmt(dist, 3)} ${um()}`),
+    h('span.misura-valore', `${fmt(Math.hypot(...d), 3)} ${um()}`),
     h('span', `ΔX ${fmt(d[0], 3)}  ΔY ${fmt(d[1], 3)}  ΔZ ${fmt(d[2], 3)}`),
-    h('button.mini', { onclick: () => azioni.copiaTesto(testo) }, 'copia'),
+    // in vista esplosa le parti sono spostate: la distanza non e' quella reale
+    esplosa
+      ? h('span.avviso', 'vista esplosa: distanza non reale')
+      : h('button.mini', { onclick: () => azioni.copiaTesto(testoMisura()) }, 'copia'),
     azzera,
   );
+}
+
+/** Testo della misura corrente (null senza due punti). */
+function testoMisura() {
+  const pts = stato.misura.punti;
+  if (!stato.misura.attiva || pts.length < 2) return null;
+  const [a, b] = pts;
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  return `distanza ${fmt(Math.hypot(...d), 3)} ${um()} · ΔX ${fmt(d[0], 3)} · ΔY ${fmt(d[1], 3)} · ΔZ ${fmt(d[2], 3)}` +
+    (renderer.esplosione > 0 ? ' (vista esplosa)' : '');
+}
+
+/**
+ * L'etichetta della misura e' un elemento HTML sopra il canvas, quindi non
+ * compare nello screenshot WebGL: la si ridisegna sull'immagine con un canvas 2D.
+ */
+function conEtichettaMisura(url) {
+  const pts = stato.misura.punti;
+  if (!stato.misura.attiva || pts.length < 2) return Promise.resolve(url);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const mid = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2, (pts[0][2] + pts[1][2]) / 2];
+        const s = camera.toScreen(mid, img.width, img.height);
+        if (s) {
+          const dim = Math.max(12, Math.round(img.height / 45));
+          const testo = `${fmt(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]), 3)} ${um()}`;
+          ctx.font = `600 ${dim}px system-ui, Segoe UI, sans-serif`;
+          const larghezza = ctx.measureText(testo).width + dim;
+          const x = Math.min(Math.max(0, s[0] + dim * 0.6), img.width - larghezza);
+          const y = Math.min(Math.max(dim * 1.6, s[1] - dim * 0.6), img.height);
+          ctx.fillStyle = 'rgba(20, 24, 32, 0.85)';
+          ctx.fillRect(x, y - dim * 1.4, larghezza, dim * 1.8);
+          ctx.fillStyle = '#ffb347';
+          ctx.textBaseline = 'alphabetic';
+          ctx.fillText(testo, x + dim * 0.5, y);
+        }
+        resolve(c.toDataURL('image/png'));
+      } catch {
+        resolve(url);
+      }
+    };
+    img.onerror = () => resolve(url);
+    img.src = url;
+  });
 }
 
 /** Posiziona a schermo l'etichetta della misura e il suggerimento al passaggio. */
@@ -663,7 +752,8 @@ function impostaSezione() {
   const k = asse === 'x' ? 0 : asse === 'y' ? 1 : 2;
   const normale = [0, 0, 0];
   normale[k] = inverti ? -1 : 1;
-  const bb = (renderer.bounds) || (stato.model ? stato.model.bbox : { min: [0, 0, 0], max: [0, 0, 0] });
+  // ingombro delle parti con l'esplosione applicata: il piano resta dentro la scena
+  const bb = renderer.ingombroVisibile(null, false) || (stato.model ? stato.model.bbox : { min: [0, 0, 0], max: [0, 0, 0] });
   const centro = (bb.min[k] + bb.max[k]) / 2;
   const mezzo = Math.max(1e-6, (bb.max[k] - bb.min[k]) / 2) * 1.05;
   const posizione = centro + t * mezzo;
@@ -712,7 +802,8 @@ function collegaInterazione() {
     }
     canvas.style.cursor = hit ? (stato.misura.attiva ? 'crosshair' : 'pointer') : 'default';
     const sugg = $('#suggerimento');
-    if (hit) {
+    // in modalita' misura il suggerimento coprirebbe il punto da cliccare
+    if (hit && !stato.misura.attiva) {
       const p = stato.model.parti[hit.parte];
       const f = p && p.facce.find((x) => x.id === hit.faccia);
       sugg.hidden = false;
@@ -720,7 +811,7 @@ function collegaInterazione() {
         h('strong', p ? p.nome : ''),
         f ? h('span', ` · ${nomeSuperficie(f.tipoSuperficie)} #${f.id}`) : null,
         h('br'),
-        h('span.tenue', `${vec(hit.punto, 2)} ${um()}`),
+        h('span.tenue', `${vec(hit.punto, 2)} ${um()}${renderer.esplosione > 0 ? ' (vista esplosa)' : ''}`),
       );
       const rect = canvas.getBoundingClientRect();
       sugg.style.left = `${ev.clientX - rect.left + 14}px`;
@@ -822,9 +913,12 @@ function collegaInterazione() {
     const inCampo = t instanceof HTMLElement && (t.matches('input, select, textarea') || t.isContentEditable);
     if (ev.code === 'Escape') {
       if (!$('#aiuto').hidden) return chiudiAiuto();
-      if (stato.misura.attiva && stato.misura.punti.length) {
-        stato.misura.punti = [];
-        aggiornaMisura();
+      if (stato.misura.attiva) {
+        // primo Esc: azzera i punti; secondo: esce dalla misura
+        if (stato.misura.punti.length) {
+          stato.misura.punti = [];
+          aggiornaMisura();
+        } else impostaMisura(false);
         return;
       }
       if (stato.selezione) azioni.deseleziona();
@@ -876,6 +970,29 @@ function collegaInterazione() {
     }
     ev.preventDefault();
   });
+}
+
+/** Ritassella il modello aperto con la tolleranza corrente, conservando selezione e misure. */
+function ritassella() {
+  if (!stato.model || stato.caricamento) return;
+  attesaRitassellazione = true;
+  mostraCaricamento(true, 0.02, 'nuova tassellazione');
+  if (worker) worker.postMessage({ type: 'retessellate', tolleranza: stato.tolleranza });
+  else if (fallbackModuli && fallbackModuli.file) {
+    const nome = stato.nomeFile;
+    fallbackModuli.model.buildModelAsync(fallbackModuli.file, {
+      tolerance: stato.tolleranza,
+      onProgress: (f, l) => progresso(f, l),
+    }).then((m) => {
+      m.nomeFileCaricato = nome;
+      gestisciMessaggio({ type: 'model', model: m, mantieni: true });
+    }).catch((err) => {
+      gestisciMessaggio({ type: 'error', messaggio: err.message });
+    });
+  } else {
+    mostraCaricamento(false);
+    attesaRitassellazione = false;
+  }
 }
 
 function impostaMisura(attiva) {
@@ -947,6 +1064,8 @@ function collegaComandi() {
   $('#esplosione').oninput = (ev) => {
     renderer.setEsplosione(Number(ev.target.value));
     $('#esplosione-valore').textContent = Number(ev.target.value) > 0 ? `${Math.round(Number(ev.target.value) * 100)}%` : '';
+    impostaSezione(); // il piano segue l'ingombro esploso
+    if (stato.misura.attiva) aggiornaMisura(); // avviso «vista esplosa»
     needsRender = true;
   };
 
@@ -983,27 +1102,14 @@ function collegaComandi() {
   $('#tolleranza').onchange = (ev) => {
     stato.tolleranza = Number(ev.target.value);
     salvaPreferenza('tolleranza', stato.tolleranza);
-    if (!stato.model) return;
+    if (!stato.model && !stato.caricamento) return;
     if (stato.caricamento) {
-      log('Attendi la fine dell’elaborazione in corso.', 'attenzione');
+      // si applica appena finisce l'elaborazione in corso
+      ritassellazioneInSospeso = true;
+      log('Qualità cambiata: verrà applicata al termine dell’elaborazione in corso.', 'attenzione');
       return;
     }
-    attesaRitassellazione = true;
-    mostraCaricamento(true, 0.02, 'nuova tassellazione');
-    if (worker) worker.postMessage({ type: 'retessellate', tolleranza: stato.tolleranza });
-    else if (fallbackModuli && fallbackModuli.file) {
-      fallbackModuli.model.buildModelAsync(fallbackModuli.file, {
-        tolerance: stato.tolleranza,
-        onProgress: (f, l) => progresso(f, l),
-      }).then((m) => {
-        m.nomeFileCaricato = stato.nomeFile;
-        gestisciMessaggio({ type: 'model', model: m, mantieni: true });
-      }).catch((err) => {
-        mostraCaricamento(false);
-        attesaRitassellazione = false;
-        log('Errore nella tassellazione: ' + err.message, 'errore');
-      });
-    }
+    ritassella();
   };
 
   $('#dettaglio-comprimi').onclick = () => {
@@ -1083,13 +1189,14 @@ function collegaEsportazioni() {
   document.addEventListener('click', () => { menu.hidden = true; });
   menu.onclick = (ev) => ev.stopPropagation();
 
-  const base = () => (stato.nomeFile || 'modello').replace(/\.[^.]+$/, '');
+  // nome base dal modello aperto (non dal file in lettura)
+  const base = () => ((stato.model && stato.model.nomeFileCaricato) || stato.nomeFile || 'modello').replace(/\.[^.]+$/, '');
   const fine = (nome, contenuto) => {
     const dim = contenuto instanceof ArrayBuffer ? contenuto.byteLength : contenuto.length;
     log(`Esportato ${nome} (${kb(dim)}).`, 'ok');
   };
-  const png = (opts, suffisso) => {
-    const url = renderer.screenshot(camera, opts);
+  const png = async (opts, suffisso) => {
+    const url = await conEtichettaMisura(renderer.screenshot(camera, opts));
     const a = document.createElement('a');
     a.href = url;
     a.download = `${base()}${suffisso}.png`;
@@ -1119,11 +1226,12 @@ function collegaEsportazioni() {
       png({ larghezza: w, sfondo: 'bianco' }, '-hd');
     },
     'png-trasparente': () => png({ larghezza: Math.min(4096, renderer.canvas.width * 2), sfondo: 'trasparente' }, '-trasparente'),
-    stampa: () => {
-      const immagine = renderer.screenshot(camera, { larghezza: 1600, sfondo: 'bianco' });
-      const html = reportHTML(stato.model, immagine, { nomeFile: stato.nomeFile });
+    stampa: async () => {
+      // la finestra va aperta subito nel gestore del clic, altrimenti il browser la blocca
       const w = window.open('', '_blank');
       if (!w) return log('Il browser ha bloccato la finestra del report: consenti i pop-up per questo file.', 'attenzione');
+      const immagine = await conEtichettaMisura(renderer.screenshot(camera, { larghezza: 1600, sfondo: 'bianco' }));
+      const html = reportHTML(stato.model, immagine, { nomeFile: base() + (stato.nomeFile.match(/\.[^.]+$/) || [''])[0], misura: testoMisura() });
       w.document.open();
       w.document.write(html);
       w.document.close();
@@ -1131,11 +1239,12 @@ function collegaEsportazioni() {
     },
   };
   menu.querySelectorAll('[data-esporta]').forEach((b) => {
-    b.onclick = () => {
+    b.onclick = async () => {
       menu.hidden = true;
       if (!stato.model) return log('Apri prima un file.', 'attenzione');
+      if (stato.caricamento) return log('Attendi la fine dell’elaborazione in corso.', 'attenzione');
       try {
-        azioniEsporta[b.dataset.esporta]();
+        await azioniEsporta[b.dataset.esporta]();
       } catch (err) {
         log('Esportazione non riuscita: ' + err.message, 'errore');
       }

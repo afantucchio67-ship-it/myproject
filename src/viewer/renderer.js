@@ -259,9 +259,21 @@ export class Renderer {
     this.sfondo = SFONDI[tema] || SFONDI.scuro;
   }
 
+  /**
+   * Disabilita gli array di attributi: un attributo abilitato ma senza buffer
+   * (o con un buffer cancellato) fa fallire i disegni successivi.
+   */
+  disabilitaAttributi() {
+    const gl = this.gl;
+    for (const prog of [this.mesh, this.line]) {
+      for (const loc of Object.values(prog.a)) if (loc >= 0) gl.disableVertexAttribArray(loc);
+    }
+  }
+
   /** Carica le parti del modello sulla GPU. */
   setParts(parti) {
     const gl = this.gl;
+    this.disabilitaAttributi();
     for (const p of this.parts) {
       for (const b of [p.posBuf, p.normBuf, p.faceBuf, p.idxBuf, p.edgeBuf, p.bboxBuf]) if (b) gl.deleteBuffer(b);
     }
@@ -394,12 +406,15 @@ export class Renderer {
     if (p.ref) p.ref.colore = rgb;
   }
 
-  /** Ingombro mondo delle sole parti visibili (con esplosione): per l'inquadratura. */
-  ingombroVisibile(indici = null) {
+  /**
+   * Ingombro mondo delle parti visibili (con esplosione): per l'inquadratura.
+   * Con `soloVisibili = false` considera tutte le parti (piano di sezione).
+   */
+  ingombroVisibile(indici = null, soloVisibili = true) {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
     this.parts.forEach((p, i) => {
-      if (!p.visibile) return;
+      if (soloVisibili && !p.visibile) return;
       if (indici && !indici.includes(i)) return;
       const bb = p.ref.bbox;
       const m = p.model;
@@ -480,6 +495,9 @@ export class Renderer {
       });
       gl.depthMask(true);
       gl.disable(gl.BLEND);
+      // il programma delle linee usa solo aPos: gli altri array vanno spenti
+      if (a.aNormal >= 0) gl.disableVertexAttribArray(a.aNormal);
+      if (a.aFaceId >= 0) gl.disableVertexAttribArray(a.aFaceId);
     }
 
     // linee: spigoli, bounding box, assi, sezione, misura
@@ -540,10 +558,10 @@ export class Renderer {
     }
   }
 
-  /** Contorno del piano di sezione (rettangolo sull'ingombro della scena). */
+  /** Contorno del piano di sezione (rettangolo sull'ingombro della scena, esplosione inclusa). */
   disegnaPianoSezione(u, a, chiaro) {
     const gl = this.gl;
-    const b = this.bounds;
+    const b = this.ingombroVisibile(null, false) || this.bounds;
     const n = this.clip.normale;
     const k = Math.abs(n[0]) > 0.5 ? 0 : Math.abs(n[1]) > 0.5 ? 1 : 2;
     const [i, j] = k === 0 ? [1, 2] : k === 1 ? [0, 2] : [0, 1];

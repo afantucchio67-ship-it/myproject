@@ -46,7 +46,7 @@ function baseSegments(curve) {
       return 1;
     case 'CIRCLE':
     case 'ELLIPSE':
-      return 24;
+      return 48; // minimo visivo: un 48-gono non si distingue da un cerchio
     case 'POLYLINE':
       return Math.max(1, Math.round(curve.domain[1] - curve.domain[0]));
     default:
@@ -854,9 +854,10 @@ function tessellateBand(surf, anelli, apici, tol, flip, mesh, faceId) {
     }
     return maxErr;
   };
-  let nu = 8;
+  // minimi visivi (32 x 4) anche quando la tolleranza sarebbe gia' rispettata
+  let nu = 32;
   while (nu < 256 && probe(nu, (t) => surf.eval(u0 + (u1 - u0) * t, (v0 + v1) / 2)) > tol) nu *= 2;
-  let nv = 2;
+  let nv = 4;
   while (nv < 128 && probe(nv, (t) => surf.eval((u0 + u1) / 2, v0 + (v1 - v0) * t)) > tol) nv *= 2;
 
   const grid = [];

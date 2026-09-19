@@ -72,11 +72,36 @@ const ETICHETTE_INFO = {
   semiasse1: 'Semiasse 1', semiasse2: 'Semiasse 2',
 };
 
-export function infoSuperficieRighe(info, um, fmtOpts = {}) {
+const CHIAVI_PUNTO = new Set(['origine', 'centro']);
+const CHIAVI_DIREZIONE = new Set(['asse', 'normale', 'direzione']);
+
+/** Trasforma punti e direzioni delle informazioni di superficie nel sistema del modello. */
+function nelMondo(k, v, matrice) {
+  if (!matrice || !Array.isArray(v) || v.length !== 3) return v;
+  const m = matrice;
+  if (CHIAVI_PUNTO.has(k)) {
+    return [
+      m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12],
+      m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13],
+      m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14],
+    ];
+  }
+  if (CHIAVI_DIREZIONE.has(k)) {
+    return [
+      m[0] * v[0] + m[4] * v[1] + m[8] * v[2],
+      m[1] * v[0] + m[5] * v[1] + m[9] * v[2],
+      m[2] * v[0] + m[6] * v[1] + m[10] * v[2],
+    ];
+  }
+  return v;
+}
+
+export function infoSuperficieRighe(info, um, matrice = null) {
   if (!info) return [];
   const righe = [];
-  for (const [k, v] of Object.entries(info)) {
+  for (const [k, v0] of Object.entries(info)) {
     const etichetta = ETICHETTE_INFO[k] || k;
+    const v = nelMondo(k, v0, matrice);
     let testo;
     if (Array.isArray(v)) testo = vec(v, 3);
     else if (typeof v === 'number') {
@@ -162,10 +187,12 @@ export function volumeTesto(p) {
 export function pannelloStruttura(model, stato, azioni) {
   const root = h('div');
   const um = model.units.simbolo || 'mm';
+  // le parti si identificano per istanza (percorso nell'albero), non per
+  // entita': lo stesso solido puo' essere usato piu' volte in un assieme
   const indiciPerNodo = (n) => {
-    const ids = new Set(n.items.map((i) => i.item.id));
+    const percorso = n.percorso.join(' / ');
     const out = [];
-    model.parti.forEach((p, i) => { if (ids.has(p.id)) out.push(i); });
+    model.parti.forEach((p, i) => { if (p.percorso === percorso) out.push(i); });
     for (const f of n.figli) out.push(...indiciPerNodo(f));
     return out;
   };
@@ -187,6 +214,7 @@ export function pannelloStruttura(model, stato, azioni) {
       title: 'mostra / nascondi',
       checked: tuttiVisibili,
       disabled: !indici.length,
+      onclick: (ev) => ev.stopPropagation(),
       onchange: (ev) => azioni.visibilitaMultipla(indici, ev.target.checked),
     });
     if (!tuttiVisibili && alcuniVisibili) chk.indeterminate = true;
@@ -205,10 +233,21 @@ export function pannelloStruttura(model, stato, azioni) {
       indici.length ? h('span.badge', indici.length === 1 ? '1 parte' : `${indici.length} parti`) : null,
       n.versione && n.versione.trim() ? h('span.badge.tenue', `rev. ${n.versione.trim()}`) : null,
     );
-    riga.onclick = () => azioni.selezionaNodo(indici);
-    riga.ondblclick = () => azioni.inquadraParti(indici);
+    riga.onclick = (ev) => {
+      if (ev.target.closest('input, button')) return; // casella e freccia hanno i loro gestori
+      azioni.selezionaNodo(indici);
+    };
+    riga.ondblclick = (ev) => {
+      if (ev.target.closest('input, button')) return;
+      azioni.inquadraParti(indici);
+    };
     const box = h('div', riga);
-    if (aperto) for (const f of n.figli) box.appendChild(nodo(f, livello + 1));
+    if (aperto) {
+      for (const f of n.figli) {
+        const figlio = nodo(f, livello + 1);
+        if (figlio) box.appendChild(figlio); // null = escluso dal filtro
+      }
+    }
     return box;
   };
 
@@ -337,7 +376,9 @@ export function pannelloDati(model) {
         ['Fattore verso mm', u.fattoreVersoMm && u.fattoreVersoMm !== 1 ? fmt(u.fattoreVersoMm, 4) : ''],
         ['Unità angolare', u.angolo ? (u.angolo.nome === 'radian' ? 'radianti' : u.angolo.nome) : ''],
         ['Dimensione dello spazio', u.dimensione],
-        ['Incertezza dichiarata', u.incertezza && u.incertezza.valore != null ? `${fmt(u.incertezza.valore, 4)} ${u.simbolo || ''}` : ''],
+        ['Incertezza dichiarata', u.incertezza && u.incertezza.valore != null
+          ? `${u.incertezza.valore.toLocaleString('it-IT', { maximumSignificantDigits: 3 })} ${u.simbolo || ''}`
+          : ''],
       ]),
     ),
   );
@@ -437,7 +478,8 @@ export function pannelloGeometria(model, stato, azioni) {
         ['Triangoli / vertici', `${intero(s.triangoli)} / ${intero(s.vertici)}`],
       ]),
       h('p.nota',
-        'Area e volume sono calcolati sulla mesh: l’errore segue la qualità impostata. ' +
+        `Area e volume sono calcolati sulla mesh (tolleranza di corda ${fmt(stato.tolleranza ?? 0.1, 2)} mm): ` +
+        'per superfici curve piccole l’errore può superare l’1 %; con «Qualità massima» scende sotto lo 0,5 %. ' +
         '«≈» segnala una mesh non perfettamente chiusa (volume approssimato), «n.d.» un valore non attendibile.'),
     ),
   );
@@ -452,7 +494,7 @@ export function pannelloGeometria(model, stato, azioni) {
           intero(p.facce.length),
           fmt(p.area, 1),
           volumeTesto(p),
-          vec(p.bbox.size, 1, ' × '),
+          vec((p.bboxMondo || p.bbox).size, 1, ' × '),
           p.bordiAperti === 0
             ? h('span.ok', 'chiusa')
             : h('span.tenue', { title: `${p.bordiAperti} bordi su ${p.bordiTotali} non condivisi` }, `${p.bordiAperti} bordi aperti`),
@@ -478,9 +520,9 @@ export function pannelloGeometria(model, stato, azioni) {
           ['Percorso', p.percorso],
           ['Tipo', p.tipo === 'MANIFOLD_SOLID_BREP' ? 'solido (BREP)' : p.tipo.toLowerCase().replace(/_/g, ' ')],
           ['Entità', `#${p.id}`],
-          ['Centroide', `${vec(p.centroide, 2)} ${um}`],
-          ['Minimo', vec(p.bbox.min, 2)],
-          ['Massimo', vec(p.bbox.max, 2)],
+          ['Centroide', `${vec(p.centroideMondo || p.centroide, 2)} ${um}`],
+          ['Minimo', vec((p.bboxMondo || p.bbox).min, 2)],
+          ['Massimo', vec((p.bboxMondo || p.bbox).max, 2)],
           ['Triangoli', intero(p.mesh.indices.length / 3)],
           ['Orientamento', p.orientamentoInvertito ? 'corretto (era verso l’interno)' : 'come nel file'],
         ]),
@@ -539,7 +581,8 @@ export function pannelloEntita(model, stato, azioni) {
       stato.risultatiEntita
         ? [
           h('p.nota', stato.risultatiEntita.length
-            ? `${intero(stato.totaleRisultati || stato.risultatiEntita.length)} risultati` + (troncati ? ` (mostrati i primi ${stato.risultatiEntita.length})` : '')
+            ? `${intero(stato.totaleRisultati || stato.risultatiEntita.length)} risultat${(stato.totaleRisultati || stato.risultatiEntita.length) === 1 ? 'o' : 'i'}` +
+              (troncati ? ` (mostrati i primi ${stato.risultatiEntita.length})` : '')
             : 'Nessuna entità corrisponde.'),
           tabella(
             ['id', 'tipo'],
@@ -585,11 +628,12 @@ export function pannelloEntita(model, stato, azioni) {
       tabella(
         ['tipo', 'conteggio'],
         model.conteggiTipi.map((t) => [
-          h('button.link', { onclick: () => azioni.cercaTipo(t.type) }, t.type),
+          h('button.link.tipo-entita', { onclick: () => azioni.cercaTipo(t.type) }, t.type),
           intero(t.count),
         ]),
         { numeriche: [1] },
       ),
+      h('p.nota', 'I record complessi (ereditarietà multipla) sono contati sotto ogni tipo dichiarato: la somma può superare il numero di entità.'),
     ),
   );
   return root;
@@ -597,8 +641,17 @@ export function pannelloEntita(model, stato, azioni) {
 
 /* ----------------------------------------------------------- diagnostica */
 
-export function pannelloDiagnostica(model) {
+export function pannelloDiagnostica(model, stato = {}, azioni = {}) {
   const root = h('div');
+  const rigaDiagnostica = (d) => {
+    // «Nome parte (#id): messaggio» -> nome cliccabile
+    const m = /^(.*?) \(#(\d+)\): (.*)$/.exec(d);
+    if (!m) return h('li', d);
+    const idx = model.parti.findIndex((p) => p.nome === m[1] && String(p.id) === m[2]);
+    return h('li',
+      idx >= 0 && azioni.selezionaParte ? h('button.link', { onclick: () => azioni.selezionaParte(idx) }, m[1]) : m[1],
+      ` (#${m[2]}): ${m[3]}`);
+  };
   const s = model.statistiche;
   root.appendChild(
     sezione(
@@ -617,7 +670,7 @@ export function pannelloDiagnostica(model) {
     sezione(
       `Segnalazioni (${model.diagnostics.length})`,
       model.diagnostics.length
-        ? h('ul.elenco', ...model.diagnostics.slice(0, 500).map((d) => h('li', d)))
+        ? h('ul.elenco', ...model.diagnostics.slice(0, 500).map(rigaDiagnostica))
         : h('p.ok', 'Nessuna anomalia: tutte le facce sono state tassellate e le mesh sono coerenti.'),
     ),
   );
@@ -640,12 +693,13 @@ export function dettaglioSelezione(model, sel, azioni) {
       ['Faccia', h('span', { title: faccia.tipoSuperficie }, `${nomeSuperficie(faccia.tipoSuperficie)} · #${faccia.id}`)],
       ['Area faccia', `${fmt(faccia.area, 2)} ${um}²`],
     );
-    righe.push(...infoSuperficieRighe(faccia.infoSuperficie, um));
+    righe.push(...infoSuperficieRighe(faccia.infoSuperficie, um, parte.matrice));
   } else if (parte) {
     righe.push(
       ['Area', `${fmt(parte.area, 1)} ${um}²`],
       ['Volume', parte.chiusa ? [volumeTesto(parte), ` ${um}³`] : '—'],
-      ['Ingombro', `${vec(parte.bbox.size, 1, ' × ')} ${um}`],
+      ['Ingombro', `${vec((parte.bboxMondo || parte.bbox).size, 1, ' × ')} ${um}`],
+      ['Visibilità', parte.visibile === false ? 'parte nascosta' : ''],
     );
   }
   if (sel.punto && sel.daClic) righe.push(['Punto cliccato', `${vec(sel.punto, 2)} ${um}`]);
@@ -653,7 +707,8 @@ export function dettaglioSelezione(model, sel, azioni) {
     h('button.mini', { onclick: () => azioni.inquadraSelezione() }, 'inquadra'),
     sel.normale ? h('button.mini', { onclick: () => azioni.vistaNormale() }, 'vista normale') : null,
     parte ? h('button.mini', { onclick: () => azioni.isola(sel.parte) }, 'isola parte') : null,
-    parte ? h('button.mini', { onclick: () => azioni.visibilita(sel.parte, false) }, 'nascondi parte') : null,
+    parte && parte.visibile !== false ? h('button.mini', { onclick: () => azioni.visibilita(sel.parte, false) }, 'nascondi parte') : null,
+    parte && parte.visibile === false ? h('button.mini', { onclick: () => azioni.visibilita(sel.parte, true) }, 'mostra parte') : null,
     h('button.mini', { onclick: () => azioni.deseleziona() }, 'chiudi'),
   );
   return h('div', coppie(righe), bottoni);

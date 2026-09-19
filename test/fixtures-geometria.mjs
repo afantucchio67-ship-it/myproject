@@ -482,7 +482,6 @@ export function patchRazionale(r = 5, h = 10, opz = {}) {
   const ctx = w.contesto();
   const s2 = Math.SQRT1_2;
   let surf;
-  let atteso;
   const v00 = w.vertice([r, 0, 0]);
   const v10 = w.vertice([0, r, 0]);
   const v01 = w.vertice([r, 0, h]);
@@ -533,7 +532,7 @@ export function patchRazionale(r = 5, h = 10, opz = {}) {
   const f = w.faccia([w.outer(w.loop([w.oe(eB), w.oe(l9), w.oe(eT, false), w.oe(l0, false)]))], surf, true);
   const shell = w.add(`OPEN_SHELL('',(${f}))`);
   w.prodotto('patch', [w.add(`SHELL_BASED_SURFACE_MODEL('',(${shell}))`)], ctx, 'MANIFOLD_SURFACE_SHAPE_REPRESENTATION');
-  atteso = { area: (Math.PI / 2) * r * h, facce: 1 };
+  const atteso = { area: (Math.PI / 2) * r * h, facce: 1 };
   return { testo: w.testo('patch-razionale.stp'), atteso };
 }
 

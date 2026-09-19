@@ -27,28 +27,31 @@ self.onmessage = (ev) => {
   const msg = ev.data || {};
   try {
     if (msg.type === 'load') {
-      nomeFile = msg.nome || '';
-      cacheTesto = new Map();
       self.postMessage({ type: 'progress', frazione: 0.02, etichetta: 'lettura del file' });
-      file = parseStep(msg.text, (frazione, etichetta) =>
+      // il file corrente viene sostituito solo se il nuovo si elabora fino in fondo
+      const nuovo = parseStep(msg.text, (frazione, etichetta) =>
         self.postMessage({ type: 'progress', frazione: frazione * 0.35, etichetta }));
-      const model = buildModel(file, {
+      const model = buildModel(nuovo, {
         tolerance: msg.tolleranza ?? 0.1,
         onProgress: (frazione, etichetta) =>
-          self.postMessage({ type: 'progress', frazione: 0.35 + frazione * 0.65, etichetta }),
+          self.postMessage({ type: 'progress', frazione: 0.35 + Math.min(frazione, 0.99) * 0.65, etichetta }),
       });
+      file = nuovo;
+      nomeFile = msg.nome || '';
+      cacheTesto = new Map();
       model.nomeFileCaricato = nomeFile;
-      self.postMessage({ type: 'model', model }, transferables(model));
+      self.postMessage({ type: 'progress', frazione: 0.995, etichetta: 'trasferimento del modello' });
+      self.postMessage({ type: 'model', model, mantieni: false }, transferables(model));
       return;
     }
     if (msg.type === 'retessellate') {
       if (!file) return;
       const model = buildModel(file, {
         tolerance: msg.tolleranza,
-        onProgress: (frazione, etichetta) => self.postMessage({ type: 'progress', frazione, etichetta }),
+        onProgress: (frazione, etichetta) => self.postMessage({ type: 'progress', frazione: Math.min(frazione, 0.99), etichetta }),
       });
       model.nomeFileCaricato = nomeFile;
-      self.postMessage({ type: 'model', model }, transferables(model));
+      self.postMessage({ type: 'model', model, mantieni: true }, transferables(model));
       return;
     }
     if (msg.type === 'entity') {

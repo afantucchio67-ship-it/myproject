@@ -374,6 +374,8 @@ export function* parseStepSteps(text) {
 
   let dataSections = 0;
   let nextProgress = 0;
+  let terminatore = false;
+  let endsec = 0;
   for (;;) {
     cur.skip();
     if (cur.i >= cur.n) break;
@@ -393,10 +395,12 @@ export function* parseStepSteps(text) {
     }
     if (/^ENDSEC\s*;/i.test(ahead)) {
       cur.oltre();
+      endsec++;
       continue;
     }
     if (/^END-ISO-10303-21\s*;/i.test(ahead)) {
       cur.oltre();
+      terminatore = true;
       continue;
     }
 
@@ -454,6 +458,8 @@ export function* parseStepSteps(text) {
   }
 
   if (!dataSections) file.warnings.push('Nessuna sezione DATA trovata.');
+  else if (endsec < dataSections) file.warnings.push('Sezione DATA senza ENDSEC: il file sembra troncato o incompleto.');
+  if (dataSections && !terminatore) file.warnings.push('Manca END-ISO-10303-21: il file sembra troncato o incompleto.');
   yield { frazione: 0.97, etichetta: 'indici' };
   indexReferences(file);
   file.stats.lines = 1;

@@ -47,6 +47,17 @@ test('CSV: BOM, separatore ; e unità nelle intestazioni', () => {
     assert.ok(csv.split('\r\n').length > 1);
   }
   assert.ok(partiCSV(m).includes('area_mm2;volume_mm3'));
+  // numeri con la virgola decimale (Excel in italiano) e niente punti decimali
+  const righe = partiCSV(m).split('\r\n');
+  assert.ok(/;600,0*;1000,0*;/.test(righe[1]) || /;600;1000;/.test(righe[1]), righe[1]);
+  assert.ok(!/\d\.\d/.test(righe[1]), 'nessun punto decimale: ' + righe[1]);
+});
+
+test('report HTML riporta la misura e il nome delle unità', () => {
+  const m = modello();
+  const html = reportHTML(m, null, { nomeFile: 'cubo.stp', misura: 'distanza 10,000 mm' });
+  assert.ok(html.includes('distanza 10,000 mm'));
+  assert.ok(/millimetri/i.test(html));
 });
 
 test('report JSON e HTML contengono le misure', () => {

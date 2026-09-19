@@ -126,7 +126,7 @@ attendibile; il numero di bordi aperti è sempre riportato.
 ## Test
 
 ```
-npm test        # 70 casi, senza dipendenze
+npm test        # 71 casi, senza dipendenze
 npm run lint    # eslint (installato globalmente: npx eslint@9 se manca)
 npm run build   # rigenera dist/visualizzatore-step.html (un test controlla che sia aggiornato)
 ```

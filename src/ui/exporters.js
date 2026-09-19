@@ -18,6 +18,16 @@ export function scarica(nomeFile, contenuto, tipo = 'text/plain') {
 }
 
 const num = (v) => (typeof v === 'number' ? Math.round(v * 1e6) / 1e6 : v);
+/** Angoli in gradi (con il nome che lo dice) nei dettagli esportati. */
+function dettagliEsportabili(info) {
+  const out = {};
+  for (const [k, v] of Object.entries(info)) {
+    if (k === 'semiangolo' && typeof v === 'number') out.semiangolo_gradi = num((v * 180) / Math.PI);
+    else out[k] = Array.isArray(v) ? v.map(num) : typeof v === 'number' ? num(v) : v;
+  }
+  return out;
+}
+const NOMI_UNITA = { mm: 'millimetri (mm)', m: 'metri (m)', cm: 'centimetri (cm)', in: 'pollici (in)', ft: 'piedi (ft)', 'µm': 'micrometri (µm)' };
 const unita = (model) => (model.units && model.units.simbolo) || 'mm';
 const partiDaEsportare = (model, opts) =>
   model.parti.filter((p) => !(opts.soloVisibili && p.visibile === false));
@@ -44,8 +54,12 @@ export function reportJSON(model) {
     volumeAffidabile: p.volumeAffidabile,
     bordiAperti: p.bordiAperti,
     chiusa: p.chiusa,
-    centroide: p.centroide.map(num),
-    bbox: { min: p.bbox.min.map(num), max: p.bbox.max.map(num), dimensioni: p.bbox.size.map(num) },
+    centroide: (p.centroideMondo || p.centroide).map(num),
+    bbox: p.bboxMondo
+      ? { min: p.bboxMondo.min.map(num), max: p.bboxMondo.max.map(num), dimensioni: p.bboxMondo.size.map(num) }
+      : { min: p.bbox.min.map(num), max: p.bbox.max.map(num), dimensioni: p.bbox.size.map(num) },
+    bboxLocale: { min: p.bbox.min.map(num), max: p.bbox.max.map(num), dimensioni: p.bbox.size.map(num) },
+    centroideLocale: p.centroide.map(num),
     matrice: p.matrice.map(num),
   }));
   const albero = (n) => ({
@@ -85,6 +99,8 @@ export function reportJSON(model) {
 
 function csvRighe(righe) {
   const esc = (v) => {
+    // separatore «;» e virgola decimale: e' la convenzione di Excel in italiano
+    if (typeof v === 'number') return String(v).replace('.', ',');
     const s = v == null ? '' : String(v);
     return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
@@ -105,7 +121,7 @@ export function facceCSV(model) {
         f.tipoSuperficie,
         num(f.area),
         f.triangoli,
-        f.infoSuperficie ? JSON.stringify(f.infoSuperficie) : '',
+        f.infoSuperficie ? JSON.stringify(dettagliEsportabili(f.infoSuperficie)) : '',
       ]);
     }
   }
@@ -129,7 +145,7 @@ export function partiCSV(model) {
       p.nome, p.percorso, p.tipo, p.id, p.facce.length, p.mesh.indices.length / 3,
       num(p.area), num(p.volume), p.chiusa ? 'si' : 'no',
       p.volumeEsatto ? 'si' : 'no', p.bordiAperti,
-      ...p.bbox.size.map(num), ...p.centroide.map(num),
+      ...(p.bboxMondo || p.bbox).size.map(num), ...(p.centroideMondo || p.centroide).map(num),
     ]);
   }
   return csvRighe(righe);
@@ -272,7 +288,8 @@ ${immagineDataUrl ? `<img src="${immagineDataUrl}" alt="modello">` : ''}
   ['Area totale', `${numIt(s.areaTotale, 1)} ${escHtml(u)}²`],
   ['Volume totale (solidi chiusi)', `${numIt(s.volumeTotale, 1)} ${escHtml(u)}³`],
   ['Parti', String(model.parti.length)],
-  ['Entità', String(s.entita)],
+  ['Entità', numIt(s.entita, 0)],
+  ...(opts.misura ? [['Misura', escHtml(opts.misura)]] : []),
 ])}</tbody></table></div>
 <div><h2>File</h2>
 <table><tbody>${righe([
@@ -280,7 +297,7 @@ ${immagineDataUrl ? `<img src="${immagineDataUrl}" alt="modello">` : ''}
   ['Data', escHtml(model.header.dataFile)],
   ['Schema', escHtml(model.header.schema)],
   ['Origine', escHtml([model.header.versionePreprocessore, model.header.sistemaOrigine].map((x) => x.trim()).filter(Boolean).join(' '))],
-  ['Unità', escHtml(model.units.lunghezza ? model.units.lunghezza.nome : '')],
+  ['Unità', escHtml(NOMI_UNITA[u] || u)],
 ])}</tbody></table></div>
 </div>
 <h2>Struttura</h2>

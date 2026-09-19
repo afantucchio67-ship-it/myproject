@@ -499,9 +499,10 @@ export function readOrganizational(file) {
     const ruoli = new Set();
     for (const ass of file.referrers(a.id)) {
       const p = ass.params;
-      const role = file.get(p[1]);
+      // APPROVAL_PERSON_ORGANIZATION(person_org, approval, role): il ruolo e' il terzo
+      const role = ass.has('APPROVAL_PERSON_ORGANIZATION') ? file.get(p[2]) : file.get(p[1]);
       if (role && (role.has('PERSON_AND_ORGANIZATION_ROLE') || role.has('APPROVAL_ROLE'))) {
-        ruoli.add(str((role.partParams('PERSON_AND_ORGANIZATION_ROLE') || role.params)[0]));
+        ruoli.add(str((role.partParams('PERSON_AND_ORGANIZATION_ROLE') || role.partParams('APPROVAL_ROLE') || role.params)[0]));
       }
     }
     persone.push({ ...info, ruoli: [...ruoli].filter(Boolean) });
@@ -619,6 +620,21 @@ export function readProperties(file) {
 
 /* ------------------------------------------------------- geometria: solidi */
 
+/** Ingombro degli 8 vertici di una scatola locale trasformati nel modello. */
+function bboxTrasformato(bb, m) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let c = 0; c < 8; c++) {
+    const l = [c & 1 ? bb.max[0] : bb.min[0], c & 2 ? bb.max[1] : bb.min[1], c & 4 ? bb.max[2] : bb.min[2]];
+    const w = transformPoint(m, l);
+    for (let k = 0; k < 3; k++) {
+      if (w[k] < min[k]) min[k] = w[k];
+      if (w[k] > max[k]) max[k] = w[k];
+    }
+  }
+  return { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
+}
+
 function bboxOf(positions, spigoli = []) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
@@ -707,7 +723,8 @@ function collectEdgePolylines(file, faces, tol) {
 function collectSetCurves(file, itemEnt, tol) {
   const p = itemEnt.partParams('GEOMETRIC_CURVE_SET') || itemEnt.partParams('GEOMETRIC_SET') || itemEnt.params;
   const out = [];
-  for (const ref of p[1] || []) {
+  const lista = Array.isArray(p[1]) ? p[1] : p[1] ? [p[1]] : [];
+  for (const ref of lista) {
     const curve = buildCurve(file, ref);
     if (!curve) continue;
     const pts = sampleCurve(curve, curve.domain[0], curve.domain[1], tol).map((t) => curve.eval(t));
@@ -940,18 +957,30 @@ export function* buildModelSteps(file, opts = {}) {
     const quota = 0.85 / Math.max(1, istanze.length);
     const etichetta = istanze.length > 1 ? `tassellazione parte ${i + 1} di ${istanze.length}` : 'tassellazione';
     yield { frazione: 0.1 + quota * i, etichetta };
-    const passi = partGeometrySteps(file, inst.item, { tolerance: tol, maxDepth: opts.maxDepth });
     let geo;
-    for (;;) {
-      const r = passi.next();
-      if (r.done) {
-        geo = r.value;
-        break;
+    try {
+      const passi = partGeometrySteps(file, inst.item, { tolerance: tol, maxDepth: opts.maxDepth });
+      for (;;) {
+        const r = passi.next();
+        if (r.done) {
+          geo = r.value;
+          break;
+        }
+        yield { frazione: 0.1 + quota * (i + r.value.fatte / Math.max(1, r.value.totali)), etichetta };
       }
-      yield { frazione: 0.1 + quota * (i + r.value.fatte / Math.max(1, r.value.totali)), etichetta };
+    } catch (err) {
+      // una parte danneggiata non deve far cadere tutto il file
+      diagnostics.push(`${inst.nodo} (#${inst.item.id}): parte non elaborabile (${err.message})`);
+      continue;
     }
-    appendAll(diagnostics, geo.diagnostics);
+    // le segnalazioni della parte portano il nome dell'istanza, non solo l'id
+    appendAll(diagnostics, geo.diagnostics.map((d) => d.replace(/^#(\d+): /, (m0, id) => `${inst.nodo} (#${id}): `)));
+    // centroide e ingombro anche nel sistema del modello (con la trasformazione)
+    const centroideMondo = transformPoint(inst.matrice, geo.centroide);
+    const bboxMondo = bboxTrasformato(geo.bbox, inst.matrice);
     parti.push({
+      centroideMondo,
+      bboxMondo,
       ...geo,
       nome: inst.nodo,
       percorso: inst.percorso,
@@ -1006,6 +1035,7 @@ export function* buildModelSteps(file, opts = {}) {
     },
     conteggiTipi: file.typeCounts(),
     diagnostics,
+    tolleranza: opts.tolerance ?? 0.1, // in mm: per sapere se una ritassellazione serve
   };
   return model;
 }
