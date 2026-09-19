@@ -263,30 +263,47 @@ const SOLID_LIKE = [
 
 /* -------------------------------------------------------- albero assieme */
 
-/** Matrice di una ITEM_DEFINED_TRANSFORMATION (da figlio a padre). */
-function transformMatrix(file, idtEnt) {
+/**
+ * Matrice figlio->padre di una ITEM_DEFINED_TRANSFORMATION.
+ * item_1 appartiene a rep_1 e item_2 a rep_2 della REPRESENTATION_RELATIONSHIP;
+ * `repFiglio` dice quale delle due rappresentazioni e' quella del componente,
+ * cosi' la convenzione (rep_1 = figlio in AP203/AP214, ma non sempre) non
+ * viene data per scontata.
+ */
+function transformMatrix(file, idtEnt, rep1, rep2, repFiglio) {
   if (!idtEnt) return identity();
   const p = idtEnt.partParams('ITEM_DEFINED_TRANSFORMATION') || idtEnt.params;
-  const parent = readPlacement(file, p[2]);
-  const child = readPlacement(file, p[3]);
-  // porta le coordinate del figlio nel sistema del padre
-  return multiply(parent, invertRigid(child));
+  const m1 = readPlacement(file, p[2]);
+  const m2 = readPlacement(file, p[3]);
+  const figlioEUno = repFiglio ? rep1 && rep1.id === repFiglio.id : true;
+  const mFiglio = figlioEUno ? m1 : m2;
+  const mPadre = figlioEUno ? m2 : m1;
+  // porta le coordinate del figlio (espresse nel suo placement) nel padre
+  return multiply(mPadre, invertRigid(mFiglio));
 }
 
 /** Trasformazione associata a una occorrenza (NEXT_ASSEMBLY_USAGE_OCCURRENCE). */
-function occurrenceTransform(file, nauoEnt) {
+function occurrenceTransform(file, nauoEnt, childPd) {
+  const repsFiglio = childPd ? shapeRepsOf(file, childPd) : [];
+  const eFiglio = (rep) => rep && repsFiglio.some((r) => r.id === rep.id);
   for (const pds of file.referrers(nauoEnt.id)) {
     if (!pds.has('PRODUCT_DEFINITION_SHAPE') && !pds.has('PROPERTY_DEFINITION')) continue;
     for (const cdsr of file.referrers(pds.id)) {
       if (!cdsr.has('CONTEXT_DEPENDENT_SHAPE_REPRESENTATION')) continue;
       const p = cdsr.partParams('CONTEXT_DEPENDENT_SHAPE_REPRESENTATION') || cdsr.params;
-      const rel = file.get(p[1]);
+      // (representation_relation, represented_product_relation): la relazione e' il primo
+      // parametro; per robustezza si cerca comunque quella che ha REPRESENTATION_RELATIONSHIP
+      const rel = [file.get(p[0]), file.get(p[1])].find((e) => e && e.has('REPRESENTATION_RELATIONSHIP'));
       if (!rel) continue;
+      const rr = rel.partParams('REPRESENTATION_RELATIONSHIP') || rel.params;
+      const rep1 = file.get(rr[2]);
+      const rep2 = file.get(rr[3]);
       const rp = rel.partParams('REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION');
       if (rp) {
         const trRef = Array.isArray(rp[0]) ? rp[0][0] : rp[0];
         const idt = file.get(trRef);
-        if (idt) return transformMatrix(file, idt);
+        const repFiglio = eFiglio(rep1) ? rep1 : eFiglio(rep2) ? rep2 : rep1;
+        if (idt) return transformMatrix(file, idt, rep1, rep2, repFiglio);
       }
     }
   }
@@ -316,7 +333,7 @@ export function readAssembly(file) {
       occ,
       child,
       nome: str(p[0]) || str(p[1]),
-      matrice: occurrenceTransform(file, occ),
+      matrice: occurrenceTransform(file, occ, child),
     });
   }
 
@@ -599,15 +616,20 @@ export function readProperties(file) {
 
 /* ------------------------------------------------------- geometria: solidi */
 
-function bboxOf(positions) {
+function bboxOf(positions, spigoli = []) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < positions.length; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      if (positions[i + k] < min[k]) min[k] = positions[i + k];
-      if (positions[i + k] > max[k]) max[k] = positions[i + k];
+  const accumula = (arr) => {
+    for (let i = 0; i < arr.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        if (arr[i + k] < min[k]) min[k] = arr[i + k];
+        if (arr[i + k] > max[k]) max[k] = arr[i + k];
+      }
     }
-  }
+  };
+  accumula(positions);
+  // senza facce (file di sole curve) l'ingombro viene dagli spigoli
+  if (!Number.isFinite(min[0])) for (const e of spigoli) accumula(e.punti);
   if (!Number.isFinite(min[0])) return { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] };
   return { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
 }
@@ -768,7 +790,10 @@ export function* partGeometrySteps(file, itemEnt, opts = {}) {
     diagnostics.push(`#${itemEnt.id}: guscio orientato verso l'interno nel file, orientamento corretto`);
   }
 
-  const bbox = bboxOf(finale.positions);
+  const spigoli = faces.length
+    ? collectEdgePolylines(file, faces, tol)
+    : collectSetCurves(file, itemEnt, tol);
+  const bbox = bboxOf(finale.positions, spigoli);
   const volumeBbox = bbox.size[0] * bbox.size[1] * bbox.size[2];
   const frazioneAperta = tenuta.totali ? tenuta.aperti / tenuta.totali : 1;
   const plausibile = volume > 0 && (volumeBbox <= 0 || volume <= volumeBbox * 1.02);
@@ -782,10 +807,6 @@ export function* partGeometrySteps(file, itemEnt, opts = {}) {
         (volumeAffidabile ? ': volume approssimato' : ': volume non calcolabile in modo attendibile'),
     );
   }
-
-  const spigoli = faces.length
-    ? collectEdgePolylines(file, faces, tol)
-    : collectSetCurves(file, itemEnt, tol);
 
   return {
     id: itemEnt.id,
@@ -926,14 +947,17 @@ export function* buildModelSteps(file, opts = {}) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
   for (const part of parti) {
-    const p = part.mesh.positions;
-    for (let i = 0; i < p.length; i += 3) {
-      const w = transformPoint(part.matrice, [p[i], p[i + 1], p[i + 2]]);
-      for (let k = 0; k < 3; k++) {
-        if (w[k] < min[k]) min[k] = w[k];
-        if (w[k] > max[k]) max[k] = w[k];
+    const accumula = (p) => {
+      for (let i = 0; i < p.length; i += 3) {
+        const w = transformPoint(part.matrice, [p[i], p[i + 1], p[i + 2]]);
+        for (let k = 0; k < 3; k++) {
+          if (w[k] < min[k]) min[k] = w[k];
+          if (w[k] > max[k]) max[k] = w[k];
+        }
       }
-    }
+    };
+    if (part.mesh.positions.length) accumula(part.mesh.positions);
+    else for (const e of part.spigoli) accumula(e.punti);
   }
   const bbox = Number.isFinite(min[0])
     ? { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] }

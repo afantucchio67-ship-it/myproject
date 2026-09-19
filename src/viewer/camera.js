@@ -18,6 +18,7 @@ export class OrbitCamera {
     this.prospettiva = true;
     this.near = 0.1;
     this.far = 10000;
+    this.raggioScena = 0; // meta' diagonale dell'ingombro: fissa i piani near/far
   }
 
   get eye() {
@@ -31,14 +32,17 @@ export class OrbitCamera {
   }
 
   projection(aspect) {
+    // i piani di taglio seguono l'ingombro della scena: zoomando su un
+    // dettaglio di un pezzo lungo il resto non sparisce
+    const R = Math.max(this.raggioScena, this.distance * 0.5, 1e-3);
     if (this.prospettiva) {
-      this.near = Math.max(this.distance / 1000, 1e-3);
-      this.far = this.distance * 20 + 1000;
+      this.far = this.distance + R * 2 + 1;
+      this.near = Math.max(this.far / 2e5, Math.min(this.distance * 0.05, this.distance - R * 1.5), 1e-4);
       return perspective(this.fov, aspect, this.near, this.far);
     }
     const h = this.distance * Math.tan(this.fov / 2);
-    this.near = -this.distance * 10 - 1000;
-    this.far = this.distance * 10 + 1000;
+    this.near = -(this.distance + R * 2);
+    this.far = this.distance + R * 2;
     return ortho(-h * aspect, h * aspect, -h, h, this.near, this.far);
   }
 
@@ -83,8 +87,17 @@ export class OrbitCamera {
     ];
     const radius = Math.max(1e-3, Math.hypot(size[0], size[1], size[2]) / 2);
     this.target = center;
+    this.raggioScena = Math.max(this.raggioScena, radius);
     const fitFov = Math.min(this.fov, 2 * Math.atan(Math.tan(this.fov / 2) * Math.max(0.35, Math.min(1, aspect))));
     this.distance = (radius / Math.sin(fitFov / 2)) * 1.12;
+  }
+
+  /** Orienta la camera in modo da guardare lungo -`direzione` (es. normale a una faccia). */
+  guardaLungo(direzione) {
+    const d = normalize(direzione);
+    if (!d[0] && !d[1] && !d[2]) return;
+    this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Math.asin(d[2])));
+    this.yaw = Math.atan2(d[1], d[0]);
   }
 
   /** Viste standard: 'fronte','retro','sinistra','destra','alto','basso','iso'. */
@@ -101,6 +114,16 @@ export class OrbitCamera {
     if (!v) return;
     this.yaw = v[0];
     this.pitch = v[1];
+  }
+
+  /** Proietta un punto del mondo in pixel del canvas; null se dietro la camera. */
+  toScreen(p, width, height) {
+    const vp = this.viewProjection(width / height);
+    const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
+    const y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
+    const w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+    if (!(w > 1e-9)) return null;
+    return [((x / w) * 0.5 + 0.5) * width, (0.5 - (y / w) * 0.5) * height];
   }
 
   /** Raggio nel mondo da coordinate pixel del canvas. */

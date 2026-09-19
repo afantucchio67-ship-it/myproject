@@ -56,9 +56,9 @@ function converti(percorso) {
   });
 
   // export ... -> dichiarazione normale, con annotazione del nome esportato
-  codice = codice.replace(/export\s+(async\s+)?function\s+(\w+)/g, (_, asy, nome) => {
+  codice = codice.replace(/export\s+(async\s+)?function\s*(\*?)\s*(\w+)/g, (_, asy, gen, nome) => {
     esportati.add(nome);
-    return `${asy || ''}function ${nome}`;
+    return `${asy || ''}function${gen ? '* ' : ' '}${nome}`;
   });
   codice = codice.replace(/export\s+class\s+(\w+)/g, (_, nome) => {
     esportati.add(nome);
@@ -74,6 +74,9 @@ function converti(percorso) {
   });
 
   for (const dep of dipendenze) converti(dep);
+
+  // dentro uno <script> inline la sequenza "</script" chiuderebbe l'elemento
+  codice = codice.replace(/<\/script/gi, '<\\/script');
 
   const registro = [...esportati].map((n) => `${n}`).join(', ');
   moduli.set(

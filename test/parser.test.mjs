@@ -53,3 +53,25 @@ test('segnala le righe non valide senza interrompere la lettura', () => {
 test('ricostruisce il testo di un parametro', () => {
   assert.equal(valueToText([{ ref: 5 }, { str: 'a' }, { enum: 'T' }, null]), "(#5,'a',.T.,$)");
 });
+
+test('legge i numeri con punto finale e le varianti degli esportatori CAD', () => {
+  const f = parseStep(avvolgi("#1=X(10.,0.,1.E-3,3.D0,-.5,+2.5E+1,7);"));
+  assert.deepEqual(f.entities.get(1).params, [10, 0, 0.001, 3, -0.5, 25, 7]);
+  assert.equal(f.warnings.length, 0);
+});
+
+test('non va in loop su testi senza punto e virgola o troncati', () => {
+  for (const testo of ['Data di consegna: 12/03/2026', 'Reference: ordine 5', 'ISO-10303-21;\nHEADER;\nDATA', 'ISO-10303-21;\nDATA;\n#1=A(', '']) {
+    const t0 = Date.now();
+    const f = parseStep(testo);
+    assert.ok(Date.now() - t0 < 2000, 'lettura terminata');
+    assert.ok(f.warnings.length >= 1, 'segnala il problema');
+  }
+});
+
+test('riconosce un testo STEP', async () => {
+  const { isStepText } = await import('../src/step/parser.js');
+  assert.ok(isStepText('ISO-10303-21;\nHEADER;'));
+  assert.ok(isStepText('\uFEFF  ISO-10303-21 ;'));
+  assert.ok(!isStepText('%PDF-1.4'));
+});

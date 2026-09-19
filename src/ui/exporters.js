@@ -218,3 +218,82 @@ export function esportaOBJ(model, opts = {}) {
   });
   return { obj: out.join('\n'), mtl: mtl.join('\n') };
 }
+
+/* ------------------------------------------------------- report stampabile */
+
+const escHtml = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const numIt = (v, d = 2) =>
+  typeof v === 'number' && Number.isFinite(v)
+    ? v.toLocaleString('it-IT', { minimumFractionDigits: d, maximumFractionDigits: d })
+    : escHtml(v);
+
+/**
+ * Report HTML autonomo (per la stampa o il salvataggio in PDF dal browser):
+ * immagine del modello, misure, struttura, parti, proprieta' e dati del file.
+ */
+export function reportHTML(model, immagineDataUrl, opts = {}) {
+  const u = unita(model);
+  const s = model.statistiche;
+  const righe = (arr) => arr.map((r) => `<tr>${r.map((c, i) => `<td class="${i ? '' : 'k'}">${c}</td>`).join('')}</tr>`).join('');
+  const tab = (intestazioni, corpo) =>
+    `<table><thead><tr>${intestazioni.map((x) => `<th>${escHtml(x)}</th>`).join('')}</tr></thead><tbody>${corpo}</tbody></table>`;
+  const albero = (n, liv = 0) =>
+    `<div style="padding-left:${liv * 16}px">${escHtml(n.nome)}${n.items.length ? ` <small>(${n.items.length} geom.)</small>` : ''}</div>` +
+    n.figli.map((f) => albero(f, liv + 1)).join('');
+  const parti = model.parti.map((p) => `<tr>
+    <td>${escHtml(p.nome)}</td><td class="n">${p.facce.length}</td><td class="n">${numIt(p.area, 1)}</td>
+    <td class="n">${p.chiusa ? (p.volumeEsatto ? '' : p.volumeAffidabile ? '≈ ' : 'n.d. ') + (p.volumeAffidabile ? numIt(p.volume, 1) : '') : '—'}</td>
+    <td class="n">${p.bbox.size.map((x) => numIt(x, 1)).join(' × ')}</td></tr>`).join('');
+  const proprieta = model.proprieta.map((p) => [escHtml(p.nome), escHtml(p.valore)]);
+  const org = model.organizzazione;
+  const data = new Date().toLocaleString('it-IT');
+  return `<!doctype html><html lang="it"><head><meta charset="utf-8">
+<title>Report — ${escHtml(opts.nomeFile || model.nomeFileCaricato || 'modello STEP')}</title>
+<style>
+  body { font: 12px/1.45 system-ui, Segoe UI, Roboto, sans-serif; color: #1a1d24; margin: 28px 36px; }
+  h1 { font-size: 20px; margin: 0 0 4px; } h2 { font-size: 14px; margin: 22px 0 6px; border-bottom: 1px solid #cbd0da; padding-bottom: 3px; }
+  .sotto { color: #5c6373; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 11.5px; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid #e3e6ec; vertical-align: top; }
+  th { color: #5c6373; font-weight: 600; } td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  td.k { color: #5c6373; width: 34%; }
+  .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+  img { max-width: 100%; border: 1px solid #cbd0da; border-radius: 6px; margin: 6px 0 4px; }
+  small { color: #5c6373; }
+  @media print { body { margin: 10mm; } h2 { break-after: avoid; } table { break-inside: auto; } tr { break-inside: avoid; } }
+</style></head><body>
+<h1>${escHtml(opts.nomeFile || model.nomeFileCaricato || 'Modello STEP')}</h1>
+<div class="sotto">Report generato il ${data} · Visualizzatore STEP · unità: ${escHtml(u)}</div>
+${immagineDataUrl ? `<img src="${immagineDataUrl}" alt="modello">` : ''}
+<div class="griglia">
+<div><h2>Misure complessive</h2>
+<table><tbody>${righe([
+  ['Ingombro X × Y × Z', `${model.bbox.size.map((x) => numIt(x, 2)).join(' × ')} ${escHtml(u)}`],
+  ['Area totale', `${numIt(s.areaTotale, 1)} ${escHtml(u)}²`],
+  ['Volume totale (solidi chiusi)', `${numIt(s.volumeTotale, 1)} ${escHtml(u)}³`],
+  ['Parti', String(model.parti.length)],
+  ['Entità', String(s.entita)],
+])}</tbody></table></div>
+<div><h2>File</h2>
+<table><tbody>${righe([
+  ['Nome dichiarato', escHtml(model.header.nomeFile)],
+  ['Data', escHtml(model.header.dataFile)],
+  ['Schema', escHtml(model.header.schema)],
+  ['Origine', escHtml([model.header.versionePreprocessore, model.header.sistemaOrigine].map((x) => x.trim()).filter(Boolean).join(' '))],
+  ['Unità', escHtml(model.units.lunghezza ? model.units.lunghezza.nome : '')],
+])}</tbody></table></div>
+</div>
+<h2>Struttura</h2>
+${model.assieme.length ? model.assieme.map((n) => albero(n)).join('') : '<small>nessun assieme dichiarato</small>'}
+<h2>Parti</h2>
+${tab(['parte', 'facce', `area ${u}²`, `volume ${u}³`, `ingombro ${u}`], parti)}
+${proprieta.length ? `<h2>Proprietà</h2>${tab(['nome', 'valore'], righe(proprieta))}` : ''}
+${org.persone.length || org.approvazioni.length ? `<h2>Organizzazione</h2>${tab(['voce', 'valore'], righe([
+  ...org.persone.map((p) => ['persona / organizzazione', `${escHtml(p.persona || '—')} @ ${escHtml(p.organizzazione || '—')} <small>${escHtml(p.ruoli.join(', '))}</small>`]),
+  ...org.approvazioni.map((a) => ['approvazione', `${escHtml(a.stato)} ${escHtml(a.data)}`]),
+  ...org.sicurezza.map((c) => ['classificazione', escHtml(c.livello)]),
+]))}` : ''}
+${model.diagnostics.length ? `<h2>Segnalazioni</h2><ul>${model.diagnostics.slice(0, 50).map((d) => `<li>${escHtml(d)}</li>`).join('')}</ul>` : ''}
+<script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));<\/script>
+</body></html>`;
+}

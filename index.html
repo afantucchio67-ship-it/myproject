@@ -3,121 +3,201 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visualizzatore STEP — geometria e dati</title>
+<title>Visualizzatore STEP</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231d2027'/%3E%3Cpath d='M16 4 27 10v12L16 28 5 22V10z' fill='none' stroke='%234c9aff' stroke-width='2'/%3E%3Cpath d='M5 10l11 6 11-6M16 16v12' fill='none' stroke='%234c9aff' stroke-width='1.4' opacity='.75'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header class="barra-alta">
-  <div class="marchio">Visualizzatore <strong>STEP</strong></div>
+  <div class="marchio"><span class="logo" aria-hidden="true"></span>Visualizzatore <strong>STEP</strong></div>
   <button id="bottone-apri" class="principale">Apri file…</button>
-  <input id="file-input" type="file" accept=".stp,.step,.STP,.STEP,.p21,.ifc" hidden>
-  <span id="nome-file" class="nome-file">nessun file</span>
-
-  <div class="gruppo">
-    <label>vista</label>
-    <button data-vista="iso" title="isometrica (0)">iso</button>
-    <button data-vista="fronte" title="fronte (1)">fr</button>
-    <button data-vista="retro" title="retro (2)">re</button>
-    <button data-vista="sinistra" title="sinistra (3)">sx</button>
-    <button data-vista="destra" title="destra (4)">dx</button>
-    <button data-vista="alto" title="alto (5)">su</button>
-    <button data-vista="basso" title="basso (6)">giù</button>
-    <button id="bottone-fit" title="inquadra tutto (f)">fit</button>
-  </div>
-
-  <div class="gruppo">
-    <label for="modo-vista">modo</label>
-    <select id="modo-vista">
-      <option value="solido-spigoli" selected>solido + spigoli</option>
-      <option value="solido">solido</option>
-      <option value="wireframe">wireframe</option>
-    </select>
-    <select id="proiezione" title="tipo di proiezione">
-      <option value="prospettiva" selected>prospettiva</option>
-      <option value="ortogonale">ortogonale</option>
-    </select>
-  </div>
-
-  <div class="gruppo">
-    <label for="opacita">trasparenza</label>
-    <input id="opacita" type="range" min="0.15" max="1" step="0.05" value="1">
-  </div>
-
-  <div class="gruppo">
-    <label><input id="sezione-attiva" type="checkbox"> sezione</label>
-    <select id="sezione-asse">
-      <option value="x">X</option>
-      <option value="y">Y</option>
-      <option value="z" selected>Z</option>
-    </select>
-    <input id="sezione-posizione" type="range" min="-1" max="1" step="0.005" value="0">
-  </div>
-
-  <div class="gruppo">
-    <label><input id="mostra-assi" type="checkbox" checked> assi</label>
-    <label><input id="mostra-bbox" type="checkbox"> ingombro</label>
-    <label><input id="misura-attiva" type="checkbox"> misura (m)</label>
-  </div>
-
-  <div class="gruppo">
-    <label for="tolleranza">qualità</label>
-    <select id="tolleranza" title="tolleranza di tassellazione (mm)">
-      <option value="0.5">bassa (0,5 mm)</option>
-      <option value="0.1" selected>media (0,1 mm)</option>
-      <option value="0.03">alta (0,03 mm)</option>
-      <option value="0.01">massima (0,01 mm)</option>
-    </select>
-  </div>
-
-  <div class="gruppo">
-    <select id="esporta" title="esporta">
-      <option value="" selected>esporta…</option>
-      <option value="json">report JSON</option>
-      <option value="csv-parti">CSV parti</option>
-      <option value="csv-facce">CSV facce</option>
-      <option value="csv-entita">CSV entità</option>
-      <option value="stl">mesh STL</option>
-      <option value="obj">mesh OBJ</option>
-      <option value="png">immagine PNG</option>
-    </select>
-    <select id="tema" title="tema">
-      <option value="scuro" selected>scuro</option>
-      <option value="chiaro">chiaro</option>
-    </select>
-  </div>
+  <input id="file-input" type="file" accept=".stp,.step,.STP,.STEP,.p21" multiple hidden>
+  <span id="nome-file" class="nome-file">nessun file aperto</span>
+  <div class="spazio"></div>
+  <button id="bottone-pannello" class="secondario" title="mostra o nascondi il pannello dati">Pannello</button>
+  <select id="tema" title="tema dell’interfaccia" aria-label="tema">
+    <option value="scuro" selected>Tema scuro</option>
+    <option value="chiaro">Tema chiaro</option>
+  </select>
+  <button id="bottone-aiuto" class="secondario" title="scorciatoie da tastiera (?)">? Aiuto</button>
+  <button id="bottone-schermo" class="secondario" title="schermo intero">⛶</button>
 </header>
 
+<nav class="nastro" id="nastro" aria-label="comandi">
+  <div class="gruppo">
+    <div class="gruppo-corpo">
+      <button data-vista="iso" title="isometrica (0)">Iso</button>
+      <button data-vista="fronte" title="fronte (1)">Fronte</button>
+      <button data-vista="retro" title="retro (2)">Retro</button>
+      <button data-vista="sinistra" title="da sinistra (3)">Sin.</button>
+      <button data-vista="destra" title="da destra (4)">Des.</button>
+      <button data-vista="alto" title="dall’alto (5)">Alto</button>
+      <button data-vista="basso" title="dal basso (6)">Basso</button>
+      <span class="sep"></span>
+      <button id="bottone-fit" title="inquadra tutto il modello (F)">Inquadra</button>
+      <button id="bottone-fit-selezione" title="inquadra la parte o la faccia selezionata (Maiusc+F)">Inquadra sel.</button>
+    </div>
+    <div class="gruppo-titolo">Vista</div>
+  </div>
+
+  <div class="gruppo">
+    <div class="gruppo-corpo">
+      <select id="modo-vista" title="modo di visualizzazione (W)">
+        <option value="solido-spigoli" selected>Solido + spigoli</option>
+        <option value="solido">Solido</option>
+        <option value="wireframe">Wireframe</option>
+      </select>
+      <select id="proiezione" title="proiezione (P)">
+        <option value="prospettiva" selected>Prospettiva</option>
+        <option value="ortogonale">Ortogonale</option>
+      </select>
+      <label class="cursore" title="opacità delle superfici"><span class="icona-testo">◐</span>
+        <input id="opacita" type="range" min="0.15" max="1" step="0.05" value="1">
+        <span id="opacita-valore" class="valore">100%</span>
+      </label>
+      <label class="spunta"><input id="mostra-assi" type="checkbox" checked> assi</label>
+      <label class="spunta"><input id="mostra-bbox" type="checkbox"> ingombro</label>
+    </div>
+    <div class="gruppo-titolo">Visualizzazione</div>
+  </div>
+
+  <div class="gruppo">
+    <div class="gruppo-corpo">
+      <label class="spunta"><input id="sezione-attiva" type="checkbox"> attiva</label>
+      <select id="sezione-asse" title="asse del piano di sezione">
+        <option value="x">X</option>
+        <option value="y">Y</option>
+        <option value="z" selected>Z</option>
+      </select>
+      <input id="sezione-posizione" type="range" min="-1" max="1" step="0.002" value="0" title="posizione del piano" disabled>
+      <span id="sezione-valore" class="valore"></span>
+      <button id="sezione-inverti" class="commuta" title="scambia il lato mantenuto" disabled>Inverti</button>
+      <button id="sezione-azzera" title="riporta il piano al centro" disabled>Azzera</button>
+    </div>
+    <div class="gruppo-titolo">Sezione (S)</div>
+  </div>
+
+  <div class="gruppo">
+    <div class="gruppo-corpo">
+      <label class="cursore" title="separa le parti dell’assieme per vederle una a una">
+        <input id="esplosione" type="range" min="0" max="1" step="0.01" value="0">
+        <span id="esplosione-valore" class="valore"></span>
+      </label>
+    </div>
+    <div class="gruppo-titolo">Esplosione</div>
+  </div>
+
+  <div class="gruppo">
+    <div class="gruppo-corpo">
+      <button id="misura-attiva" class="commuta" aria-pressed="false" title="misura la distanza fra due punti (M)">Misura</button>
+      <select id="tolleranza" title="qualità della tassellazione: più alta = più triangoli e misure più precise">
+        <option value="0.5">Qualità bassa</option>
+        <option value="0.1" selected>Qualità media</option>
+        <option value="0.03">Qualità alta</option>
+        <option value="0.01">Qualità massima</option>
+      </select>
+      <div class="menu-contenitore">
+        <button id="bottone-esporta" title="esporta dati, mesh e immagini">Esporta ▾</button>
+        <div id="menu-esporta" class="menu" hidden>
+          <div class="menu-titolo">Dati</div>
+          <button data-esporta="json">Report completo (JSON)</button>
+          <button data-esporta="csv-parti">Parti (CSV)</button>
+          <button data-esporta="csv-facce">Facce (CSV)</button>
+          <button data-esporta="csv-entita">Entità per tipo (CSV)</button>
+          <button data-esporta="stampa">Report stampabile / PDF</button>
+          <div class="menu-titolo">Mesh (parti visibili)</div>
+          <button data-esporta="stl-bin">STL binario</button>
+          <button data-esporta="stl-ascii">STL ASCII</button>
+          <button data-esporta="obj">OBJ + MTL (con colori)</button>
+          <div class="menu-titolo">Immagini</div>
+          <button data-esporta="png">PNG come a schermo</button>
+          <button data-esporta="png-hd">PNG alta risoluzione, sfondo bianco</button>
+          <button data-esporta="png-trasparente">PNG alta risoluzione, sfondo trasparente</button>
+        </div>
+      </div>
+    </div>
+    <div class="gruppo-titolo">Strumenti</div>
+  </div>
+</nav>
+
 <main>
-  <aside class="laterale">
-    <nav class="schede">
+  <aside class="laterale" id="laterale">
+    <nav class="schede" aria-label="schede dati">
       <button class="scheda attiva" data-scheda="struttura">Struttura</button>
       <button class="scheda" data-scheda="dati">Dati</button>
       <button class="scheda" data-scheda="geometria">Geometria</button>
       <button class="scheda" data-scheda="entita">Entità</button>
-      <button class="scheda" data-scheda="diagnostica">Diagnostica</button>
+      <button class="scheda" data-scheda="diagnostica">Diagnostica <span id="badge-diagnostica" class="badge-conteggio" hidden></span></button>
     </nav>
     <div id="pannello" class="pannello"></div>
   </aside>
+  <div class="maniglia" id="maniglia" title="trascina per ridimensionare il pannello"></div>
 
   <section class="area-vista">
     <canvas id="vista"></canvas>
+
+    <div id="stato-vuoto" class="stato-vuoto">
+      <div class="stato-vuoto-card">
+        <div class="stato-vuoto-icona" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="56" height="56"><path d="M32 6 56 19v26L32 58 8 45V19z" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M8 19l24 13 24-13M32 32v26" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".7"/></svg>
+        </div>
+        <h2>Trascina qui un file STEP</h2>
+        <p>Formati <code>.stp</code> e <code>.step</code>. Il file viene letto sul tuo computer e non lascia il browser.</p>
+        <button id="bottone-apri-vuoto" class="principale">Scegli un file…</button>
+        <p class="tenue">Poi: trascina per ruotare · rotellina per ingrandire · clic su una faccia per interrogarla</p>
+      </div>
+    </div>
+
+    <div id="caricamento" class="caricamento" hidden>
+      <div class="caricamento-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <div id="caricamento-testo">elaborazione…</div>
+        <div class="progresso"><div id="caricamento-barra" class="riempimento"></div></div>
+      </div>
+    </div>
+
+    <div id="suggerimento" class="suggerimento" hidden></div>
+    <div id="misura-etichetta" class="misura-etichetta" hidden></div>
     <div id="misura-info" class="misura-info" hidden></div>
-    <div class="dettaglio-box">
-      <h4>Selezione</h4>
+
+    <div id="dettaglio-box" class="dettaglio-box" hidden>
+      <h4><button id="dettaglio-comprimi" class="freccia" title="comprimi / espandi">▾</button> Selezione</h4>
       <div id="dettaglio"></div>
     </div>
-    <div class="aiuto">
-      trascina = ruota · maiusc/destro = sposta · rotella = zoom · clic = interroga faccia
-    </div>
+
+    <div class="aiuto-breve">trascina: ruota · Maiusc o tasto destro: sposta · rotellina: zoom · clic: interroga · doppio clic: centra · ? aiuto</div>
   </section>
 </main>
 
 <footer class="barra-stato">
   <span id="stato-messaggio" class="stato-messaggio">avvio…</span>
   <span id="barra-stato-dati" class="dati"></span>
-  <div id="barra-progresso" class="progresso" hidden><div class="riempimento"></div></div>
 </footer>
+
+<div id="aiuto" class="dialogo" hidden>
+  <div class="dialogo-card" role="dialog" aria-labelledby="aiuto-titolo">
+    <h3 id="aiuto-titolo">Comandi e scorciatoie</h3>
+    <table class="tabella compatta">
+      <tbody>
+        <tr><td>Trascina</td><td>ruota il modello</td></tr>
+        <tr><td>Maiusc + trascina · tasto destro · tasto centrale</td><td>sposta</td></tr>
+        <tr><td>Rotellina · pizzico su touch</td><td>ingrandisce verso il puntatore</td></tr>
+        <tr><td>Clic su una faccia</td><td>seleziona e mostra i dati della faccia</td></tr>
+        <tr><td>Doppio clic</td><td>centra la vista nel punto</td></tr>
+        <tr><td><kbd>0</kbd>…<kbd>6</kbd></td><td>viste: iso, fronte, retro, sinistra, destra, alto, basso</td></tr>
+        <tr><td><kbd>F</kbd> · <kbd>Maiusc</kbd>+<kbd>F</kbd></td><td>inquadra tutto · inquadra la selezione</td></tr>
+        <tr><td><kbd>W</kbd></td><td>cambia modo: solido + spigoli → solido → wireframe</td></tr>
+        <tr><td><kbd>P</kbd></td><td>prospettiva / ortogonale</td></tr>
+        <tr><td><kbd>M</kbd></td><td>misura fra due punti (si aggancia ai vertici vicini)</td></tr>
+        <tr><td><kbd>S</kbd></td><td>attiva / disattiva la sezione</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>annulla la misura, deseleziona, chiude le finestre</td></tr>
+        <tr><td><kbd>?</kbd> · <kbd>F1</kbd></td><td>questa finestra</td></tr>
+      </tbody>
+    </table>
+    <p class="nota">Nelle tabelle: clic = seleziona ed evidenzia nel 3D · doppio clic = inquadra. I file restano sul tuo computer.</p>
+    <div class="riga-bottoni"><button id="chiudi-aiuto" class="principale">Chiudi</button></div>
+  </div>
+</div>
 
 <script type="module">
   import { avvia } from './src/ui/app.js';

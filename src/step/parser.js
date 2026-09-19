@@ -141,6 +141,12 @@ class Cursor {
     this.n = text.length;
   }
 
+  /** Porta il cursore oltre il prossimo ';' (o a fine testo se manca): mai un passo nullo. */
+  oltre(ch = ';') {
+    const k = this.t.indexOf(ch, this.i);
+    this.i = k < 0 ? this.n : k + 1;
+  }
+
   skip() {
     const t = this.t;
     while (this.i < this.n) {
@@ -232,11 +238,14 @@ function parseValue(cur) {
     cur.i = end + 1;
     return { bin: val };
   }
-  if (c === '-' || c === '+' || (c >= '0' && c <= '9')) {
-    const m = /^[-+]?[0-9]*\.?[0-9]+(?:[EeDd][-+]?[0-9]+)?/.exec(cur.t.slice(cur.i));
+  if (c === '-' || c === '+' || c === '.' && /[0-9]/.test(cur.t[cur.i + 1] || '') || (c >= '0' && c <= '9')) {
+    // accetta anche "10." "0." "1.E-3" "3.D0" "-.5" (esportatori NX, SolidWorks, CATIA, Creo)
+    const m = /^[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[EeDd][-+]?[0-9]+)?/.exec(cur.t.slice(cur.i, cur.i + 64));
     if (!m) throw new Error('numero non valido');
     cur.i += m[0].length;
-    return Number(m[0].replace(/[Dd]/, 'e'));
+    let testo = m[0].replace(/[Dd]/, 'e');
+    if (/\.(?:e|$)/i.test(testo)) testo = testo.replace('.', '.0');
+    return Number(testo);
   }
   const m = RE_NAME.exec(cur.t.slice(cur.i, cur.i + 128));
   if (m && m.index === 0) {
@@ -286,18 +295,24 @@ function parseHeaderSection(cur, file) {
     cur.skip();
     if (cur.i >= cur.n) return;
     if (/^ENDSEC\s*;/i.test(cur.t.slice(cur.i, cur.i + 16))) {
-      cur.i += cur.t.slice(cur.i).indexOf(';') + 1;
+      cur.oltre();
       return;
     }
-    const parts = parseRecordBody(cur);
+    if (/^DATA\s*[;(]/i.test(cur.t.slice(cur.i, cur.i + 8))) return; // HEADER senza ENDSEC
+    const prima = cur.i;
+    let parts = [];
+    try {
+      parts = parseRecordBody(cur);
+    } catch (err) {
+      file.warnings.push(`intestazione: ${err.message}`);
+    }
     cur.skip();
     cur.eat(';');
     for (const p of parts) file.header.push(new StepEntity(null, p.type, p.params, null));
-    if (!parts.length) {
+    if (!parts.length || cur.i <= prima) {
       // token imprevisto: salta alla prossima istruzione
-      const semi = cur.t.indexOf(';', cur.i);
-      if (semi < 0) return;
-      cur.i = semi + 1;
+      cur.oltre();
+      if (cur.i <= prima) cur.i = prima + 1;
     }
   }
 }
@@ -354,7 +369,7 @@ export function* parseStepSteps(text) {
   if (!/^ISO-10303-21\s*;/i.test(text.slice(cur.i, cur.i + 32))) {
     file.warnings.push("Intestazione ISO-10303-21 assente: il file potrebbe non essere STEP.");
   } else {
-    cur.i += text.slice(cur.i).indexOf(';') + 1;
+    cur.oltre();
   }
 
   let dataSections = 0;
@@ -364,24 +379,24 @@ export function* parseStepSteps(text) {
     if (cur.i >= cur.n) break;
 
     const ahead = text.slice(cur.i, cur.i + 24);
+    const prima = cur.i;
     if (/^HEADER\s*;/i.test(ahead)) {
-      cur.i += text.slice(cur.i).indexOf(';') + 1;
+      cur.oltre();
       parseHeaderSection(cur, file);
       continue;
     }
-    if (/^(DATA|ANCHOR|REFERENCE|SIGNATURE)\b/i.test(ahead)) {
+    if (/^(DATA|ANCHOR|REFERENCE|SIGNATURE)\s*[;(]/i.test(ahead)) {
       // DATA; oppure DATA('nome');
-      const semi = text.indexOf(';', cur.i);
-      cur.i = semi + 1;
+      cur.oltre();
       dataSections++;
       continue;
     }
     if (/^ENDSEC\s*;/i.test(ahead)) {
-      cur.i += text.slice(cur.i).indexOf(';') + 1;
+      cur.oltre();
       continue;
     }
     if (/^END-ISO-10303-21\s*;/i.test(ahead)) {
-      cur.i += text.slice(cur.i).indexOf(';') + 1;
+      cur.oltre();
       continue;
     }
 
@@ -390,18 +405,15 @@ export function* parseStepSteps(text) {
       cur.i++;
       const m = /^[0-9]+/.exec(text.slice(cur.i, cur.i + 24));
       if (!m) {
-        const semi = text.indexOf(';', start);
-        if (semi < 0) break;
-        cur.i = semi + 1;
+        cur.i = start;
+        cur.oltre();
         continue;
       }
       const id = Number(m[0]);
       cur.i += m[0].length;
       cur.skip();
       if (!cur.eat('=')) {
-        const semi = text.indexOf(';', cur.i);
-        if (semi < 0) break;
-        cur.i = semi + 1;
+        cur.oltre();
         continue;
       }
       try {
@@ -426,9 +438,7 @@ export function* parseStepSteps(text) {
         indexEntity(file, ent);
       } catch (err) {
         file.warnings.push(`#${id}: ${err.message}`);
-        const semi = text.indexOf(';', cur.i);
-        if (semi < 0) break;
-        cur.i = semi + 1;
+        cur.oltre();
       }
 
       if (cur.i >= nextProgress) {
@@ -439,9 +449,8 @@ export function* parseStepSteps(text) {
     }
 
     // qualsiasi altra cosa: avanza fino al prossimo ';'
-    const semi = text.indexOf(';', cur.i);
-    if (semi < 0) break;
-    cur.i = semi + 1;
+    cur.oltre();
+    if (cur.i <= prima) cur.i = prima + 1; // guardia: mai fermi sullo stesso punto
   }
 
   if (!dataSections) file.warnings.push('Nessuna sezione DATA trovata.');

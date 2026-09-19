@@ -26,8 +26,15 @@ const TIPI = {
   '.step': 'text/plain; charset=utf-8',
 };
 
-createServer((req, res) => {
-  const url = decodeURIComponent((req.url || '/').split('?')[0]);
+const server = createServer((req, res) => {
+  let url;
+  try {
+    url = decodeURIComponent((req.url || '/').split('?')[0]);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('URL non valido');
+    return;
+  }
   let percorso = join(radice, normalize(url).replace(/^(\.\.[/\\])+/, ''));
   try {
     if (statSync(percorso).isDirectory()) percorso = join(percorso, 'index.html');
@@ -45,7 +52,15 @@ createServer((req, res) => {
     'content-type': TIPI[extname(percorso).toLowerCase()] || 'application/octet-stream',
     'cache-control': 'no-cache',
   });
-  createReadStream(percorso).pipe(res);
-}).listen(porta, () => {
+  createReadStream(percorso).on('error', () => res.end()).pipe(res);
+});
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`La porta ${porta} è già in uso: chiudi l'altra istanza oppure avvia con "node server.mjs ${porta + 1}".`);
+  } else console.error(err.message);
+  process.exit(1);
+});
+server.listen(porta, () => {
   console.log(`Visualizzatore STEP su http://localhost:${porta}/  (radice: ${radice})`);
+  console.log('Premi Ctrl+C per fermare il server.');
 });

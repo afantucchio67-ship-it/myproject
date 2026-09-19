@@ -46,6 +46,50 @@ class Scrittore {
     );
   }
 
+  /** Solido cubo (senza involucro prodotto): restituisce il riferimento MANIFOLD_SOLID_BREP. */
+  cubo(l, nomeSolido = 'cubo') {
+    const w = this;
+    const c = [
+      [0, 0, 0], [l, 0, 0], [l, l, 0], [0, l, 0],
+      [0, 0, l], [l, 0, l], [l, l, l], [0, l, l],
+    ];
+    const vertici = c.map((p) => w.add(`VERTEX_POINT('',${w.punto(p)})`));
+    const facce = [
+      { idx: [0, 3, 2, 1], normale: [0, 0, -1], asseX: [1, 0, 0] },
+      { idx: [4, 5, 6, 7], normale: [0, 0, 1], asseX: [1, 0, 0] },
+      { idx: [0, 1, 5, 4], normale: [0, -1, 0], asseX: [1, 0, 0] },
+      { idx: [1, 2, 6, 5], normale: [1, 0, 0], asseX: [0, 1, 0] },
+      { idx: [2, 3, 7, 6], normale: [0, 1, 0], asseX: [-1, 0, 0] },
+      { idx: [3, 0, 4, 7], normale: [-1, 0, 0], asseX: [0, -1, 0] },
+    ];
+    const spigoli = new Map();
+    const spigolo = (a, b) => {
+      const chiave = a < b ? `${a}-${b}` : `${b}-${a}`;
+      if (!spigoli.has(chiave)) {
+        const [i, j] = a < b ? [a, b] : [b, a];
+        const dir = [c[j][0] - c[i][0], c[j][1] - c[i][1], c[j][2] - c[i][2]];
+        const lung = Math.hypot(...dir);
+        const vettore = w.add(`VECTOR('',${w.direzione(dir.map((x) => x / lung))},${lung.toFixed(9)})`);
+        const linea = w.add(`LINE('',${w.punto(c[i])},${vettore})`);
+        spigoli.set(chiave, { ref: w.add(`EDGE_CURVE('',${vertici[i]},${vertici[j]},${linea},.T.)`), da: i, a: j });
+      }
+      return spigoli.get(chiave);
+    };
+    const facceRef = facce.map((f) => {
+      const orientati = [];
+      for (let k = 0; k < 4; k++) {
+        const e = spigolo(f.idx[k], f.idx[(k + 1) % 4]);
+        orientati.push(w.add(`ORIENTED_EDGE('',*,*,${e.ref},${e.da === f.idx[k] ? '.T.' : '.F.'})`));
+      }
+      const loop = w.add(`EDGE_LOOP('',(${orientati.join(',')}))`);
+      const bound = w.add(`FACE_OUTER_BOUND('',${loop},.T.)`);
+      const piano = w.add(`PLANE('',${w.placement(c[f.idx[0]], f.normale, f.asseX)})`);
+      return w.add(`ADVANCED_FACE('',(${bound}),${piano},.T.)`);
+    });
+    const shell = w.add(`CLOSED_SHELL('',(${facceRef.join(',')}))`);
+    return w.add(`MANIFOLD_SOLID_BREP('${nomeSolido}',${shell})`);
+  }
+
   /** Involucro prodotto + rappresentazione di forma per un solido. */
   prodotto(nome, solido, contesto) {
     const appCtx = this.add(`APPLICATION_CONTEXT('automotive design')`);
@@ -168,4 +212,59 @@ export function cilindroStep(r = 5, h = 20) {
   const solido = w.add(`MANIFOLD_SOLID_BREP('cilindro',${shell})`);
   w.prodotto('cilindro di prova', solido, ctx);
   return w.testo('cilindro.stp');
+}
+
+/**
+ * Assieme: un cubo di lato `l` istanziato due volte, la seconda traslata di
+ * `trasl` e ruotata di 90° attorno a Z. L'ingombro globale deve riflettere le
+ * trasformazioni (AP203: CONTEXT_DEPENDENT_SHAPE_REPRESENTATION).
+ */
+export function assiemeStep(l = 10, trasl = [50, 0, 0]) {
+  const w = new Scrittore();
+  const ctx = w.contesto();
+  const appCtx = w.add(`APPLICATION_CONTEXT('automotive design')`);
+  const mech = w.add(`MECHANICAL_CONTEXT('',${appCtx},'mechanical')`);
+  const design = w.add(`DESIGN_CONTEXT('',${appCtx},'design')`);
+  const defProdotto = (nome) => {
+    const prod = w.add(`PRODUCT('${nome}','${nome}','',(${mech}))`);
+    const form = w.add(`PRODUCT_DEFINITION_FORMATION('A','',${prod})`);
+    const pd = w.add(`PRODUCT_DEFINITION('design','',${form},${design})`);
+    const pds = w.add(`PRODUCT_DEFINITION_SHAPE('','',${pd})`);
+    return { prod, pd, pds };
+  };
+  // componente con la geometria
+  const comp = defProdotto('cubo');
+  const solido = w.cubo(l);
+  const origine = w.placement([0, 0, 0], [0, 0, 1], [1, 0, 0]);
+  const repComp = w.add(`SHAPE_REPRESENTATION('cubo',(${origine}),${ctx})`);
+  const repBrep = w.add(`ADVANCED_BREP_SHAPE_REPRESENTATION('cubo',(${solido}),${ctx})`);
+  w.add(`SHAPE_DEFINITION_REPRESENTATION(${comp.pds},${repComp})`);
+  w.add(`SHAPE_REPRESENTATION_RELATIONSHIP('','',${repComp},${repBrep})`);
+  // assieme con due occorrenze
+  const ass = defProdotto('assieme');
+  const p1 = w.placement([0, 0, 0], [0, 0, 1], [1, 0, 0]);
+  const p2 = w.placement(trasl, [0, 0, 1], [0, 1, 0]); // ruotato di 90° attorno a Z
+  const repAss = w.add(`SHAPE_REPRESENTATION('assieme',(${p1},${p2}),${ctx})`);
+  w.add(`SHAPE_DEFINITION_REPRESENTATION(${ass.pds},${repAss})`);
+  for (const [nome, placement] of [['istanza 1', p1], ['istanza 2', p2]]) {
+    const nauo = w.add(`NEXT_ASSEMBLY_USAGE_OCCURRENCE('${nome}','${nome}','',${ass.pd},${comp.pd},$)`);
+    const pdsOcc = w.add(`PRODUCT_DEFINITION_SHAPE('','',${nauo})`);
+    const idt = w.add(`ITEM_DEFINED_TRANSFORMATION('','',${origine},${placement})`);
+    const rel = w.add(`(REPRESENTATION_RELATIONSHIP('','',${repComp},${repAss})REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(${idt})SHAPE_REPRESENTATION_RELATIONSHIP())`);
+    w.add(`CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(${rel},${pdsOcc})`);
+  }
+  return w.testo('assieme.stp');
+}
+
+/** File di sole curve (GEOMETRIC_CURVE_SET): una linea e un cerchio. */
+export function soloCurveStep() {
+  const w = new Scrittore();
+  const ctx = w.contesto();
+  const dir = w.direzione([1, 0, 0]);
+  const vettore = w.add(`VECTOR('',${dir},100.0)`);
+  const linea = w.add(`LINE('',${w.punto([0, 0, 0])},${vettore})`);
+  const cerchio = w.add(`CIRCLE('',${w.placement([0, 0, 0], [0, 0, 1], [1, 0, 0])},20.0)`);
+  const set = w.add(`GEOMETRIC_CURVE_SET('curve',(${linea},${cerchio}))`);
+  w.add(`GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION('',(${set}),${ctx})`);
+  return w.testo('curve.stp');
 }

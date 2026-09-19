@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseStep } from '../src/step/parser.js';
 import { buildModel } from '../src/step/model.js';
-import { cilindroStep, cuboStep } from './fixtures.mjs';
+import { assiemeStep, cilindroStep, cuboStep, soloCurveStep } from './fixtures.mjs';
 
 function modello(testo, tolleranza = 0.02) {
   return buildModel(parseStep(testo), { tolerance: tolleranza });
@@ -92,4 +92,29 @@ test('statistiche e conteggi delle entità', () => {
   assert.equal(m.geometria.spigoli, 12);
   assert.equal(m.geometria.vertici, 8);
   assert.ok(m.conteggiTipi.some((t) => t.type === 'ADVANCED_FACE' && t.count === 6));
+});
+
+test('assieme: le trasformazioni delle occorrenze vengono applicate', () => {
+  const m = modello(assiemeStep(10, [50, 0, 0]));
+  assert.equal(m.parti.length, 2, 'due istanze dello stesso solido');
+  assert.deepEqual(m.parti.map((p) => p.nome), ['istanza 1', 'istanza 2']);
+  // la seconda istanza e' traslata di 50 e ruotata di 90° attorno a Z:
+  // il cubo occupa x in [40, 50] (x' = -y + 50) e y in [0, 10]
+  const b = m.bbox;
+  assert.ok(Math.abs(b.min[0] - 0) < 1e-6 && Math.abs(b.max[0] - 50) < 1e-6, `x ${b.min[0]}..${b.max[0]}`);
+  assert.ok(Math.abs(b.min[1] - 0) < 1e-6 && Math.abs(b.max[1] - 10) < 1e-6, `y ${b.min[1]}..${b.max[1]}`);
+  assert.ok(Math.abs(b.size[2] - 10) < 1e-6);
+  const seconda = m.parti[1].matrice;
+  assert.ok(Math.abs(seconda[12] - 50) < 1e-9, 'traslazione X nella matrice');
+  assert.ok(Math.abs(seconda[0]) < 1e-9 && Math.abs(seconda[1] - 1) < 1e-9, 'rotazione di 90° attorno a Z');
+});
+
+test('file di sole curve: ingombro dagli spigoli e nessun triangolo', () => {
+  const m = modello(soloCurveStep());
+  assert.equal(m.parti.length, 1);
+  const p = m.parti[0];
+  assert.equal(p.mesh.indices.length, 0);
+  assert.equal(p.spigoli.length, 2);
+  assert.ok(Math.abs(p.bbox.max[0] - 100) < 1e-6 && Math.abs(p.bbox.min[0] + 20) < 1e-6, `bbox x ${p.bbox.min[0]}..${p.bbox.max[0]}`);
+  assert.ok(Math.abs(m.bbox.size[1] - 40) < 1e-6, 'ingombro globale dal cerchio');
 });
