@@ -977,13 +977,17 @@ export function tessellateFace(file, faceEnt, mesh, opts = {}) {
       p: uv.p3 || surf.eval(uv[0], uv[1]),
       segs: [(i - 1 + nRing) % nRing, i],
     }));
+    // cache dei vertici per (u, v): mappe numeriche a due livelli, niente stringhe
     const cache = new Map();
     const emit = (vert) => {
-      const key = vert.uv[0] + '|' + vert.uv[1];
-      let id = cache.get(key);
+      const u = vert.uv[0];
+      const v = vert.uv[1];
+      let riga = cache.get(u);
+      if (!riga) cache.set(u, (riga = new Map()));
+      let id = riga.get(v);
       if (id === undefined) {
-        id = mesh.vertex(vert.p, surfaceNormalAt(surf, vert.uv[0], vert.uv[1], flip));
-        cache.set(key, id);
+        id = mesh.vertex(vert.p, surfaceNormalAt(surf, u, v, flip));
+        riga.set(v, id);
       }
       return id;
     };
