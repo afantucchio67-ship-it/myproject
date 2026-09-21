@@ -1,0 +1,116 @@
+# Compila l'app desktop firmabile per Windows e macOS.
+#
+# Si avvia a mano (Actions → «App desktop» → Run workflow) oppure pubblicando
+# un tag: `git tag v1.0.0 && git push origin v1.0.0`. Con il tag i pacchetti
+# vengono allegati anche a una Release di GitHub, pronta da distribuire.
+#
+# macOS va compilato su macOS: solo lì l'app viene firmata (senza firma le
+# app Apple Silicon non partono). Windows va compilato su Windows per avere
+# l'installatore. Questo workflow usa i runner giusti per entrambi.
+name: App desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  verifica:
+    name: Test e lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx eslint src bin test desktop build.mjs server.mjs
+
+  windows:
+    name: Windows (installatore, portatile, zip)
+    needs: verifica
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compila l'app
+        run: npm run app:win
+        env:
+          # firma del codice: aggiungi i segreti nel repository per firmare
+          # (CSC_LINK = certificato .pfx in base64, CSC_KEY_PASSWORD = password)
+          CSC_LINK: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          retention-days: 30
+          path: |
+            dist-app/*.exe
+            dist-app/*.zip
+            dist-app/*.blockmap
+
+  macos:
+    name: macOS (dmg e zip, Intel e Apple Silicon)
+    needs: verifica
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compila l'app
+        run: npm run app:mac
+        env:
+          # senza certificato electron-builder firma «ad hoc»: l'app parte
+          # anche su Apple Silicon, ma al primo avvio serve tasto destro → Apri.
+          # Con l'account sviluppatore Apple: metti i segreti qui sotto.
+          CSC_LINK: ${{ secrets.APPLE_CERT_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          retention-days: 30
+          path: |
+            dist-app/*.dmg
+            dist-app/*.zip
+            dist-app/*.blockmap
+
+  rilascio:
+    name: Release con i pacchetti
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: pacchetti
+      - name: Pubblica la Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pacchetti/**/*
+          generate_release_notes: true
+          body: |
+            **Visualizzatore STEP** — Antonio Fantucchio, Software Engineer
+            a.fantucchio67@gmail.com · +39 392 0021816
+
+            | Sistema | File da scaricare |
+            |---|---|
+            | Windows | `Visualizzatore STEP-<versione>-installatore.exe` (installa) o `-portatile.exe` (avvio diretto) |
+            | macOS Apple Silicon | `Visualizzatore STEP-<versione>-arm64.dmg` |
+            | macOS Intel | `Visualizzatore STEP-<versione>-x64.dmg` |
+
+            I file STEP restano sul computer: l'app funziona senza rete.

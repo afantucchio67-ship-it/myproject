@@ -12,14 +12,30 @@ Funziona **interamente nel browser**: nessun caricamento su server, nessuna
 dipendenza esterna. Parser STEP, tassellatore BREP e renderer WebGL sono scritti
 da zero in questo repository. I file restano sul computer di chi li apre.
 
-## Due modi per usarlo
+## Tre modi per usarlo
 
 **A) File unico, senza installare nulla** — `dist/visualizzatore-step.html`:
 scaricalo e aprilo con un doppio clic, poi trascina dentro il file `.stp`.
 Contiene già tutto (HTML, CSS e codice) e funziona anche senza rete.
 
-**B) Con il server locale** (consigliato per i file grandi: la lettura avviene
-in un web worker e l'interfaccia resta sempre reattiva). Serve solo Node.js 18+:
+**B) App desktop per Windows e macOS** — un eseguibile da distribuire ai
+clienti: niente Node, niente browser, niente rete, codice chiuso in un archivio
+compilato che l'app rifiuta di caricare se viene modificato.
+
+```
+npm ci            # una volta
+npm run app:win   # installatore + portatile + zip per Windows → dist-app/
+npm run app:mac   # dmg e zip per macOS (Intel e Apple Silicon) → dist-app/
+npm run app       # prova l'app senza impacchettarla
+```
+
+macOS va compilato su macOS (senza firma le app Apple Silicon non partono):
+il workflow `.github/workflows/app-desktop.yml` compila entrambi i sistemi su
+GitHub e allega i pacchetti a una Release. Dettagli, firma del codice e
+risposte per i clienti: [DISTRIBUZIONE.md](DISTRIBUZIONE.md).
+
+**C) Con il server locale** (per sviluppare o per usarlo dal browser). Serve
+solo Node.js 18+:
 
 ```
 node server.mjs            # http://localhost:8080  (solo questo computer)
@@ -96,12 +112,17 @@ src/step/model.js         livello semantico: intestazione, unità (anche pollici
 src/step/esploratore.js   ricerca e scheda delle entità (usato da worker e pagina)
 src/viewer/               matrici, camera orbitale, renderer WebGL, selezione a griglia
 src/worker/               lettura e tassellazione in un web worker
-src/ui/                   pannelli, esportazioni, applicazione
+src/ui/                   pannelli, esportazioni, applicazione (avvio.js = ingresso)
+desktop/main.js           app desktop: finestra, menu, protocollo interno, hardening
+desktop/preload.cjs       ponte minimo fra app e pagina (sandbox, nessun Node nella pagina)
+electron-builder.yml      impacchettamento per Windows, macOS e Linux
 src/brand.js              nome, ruolo e contatti: unico punto da modificare
 src/brand-logo.js         logo incorporato (generato, non si modifica a mano)
 assets/logo-af.png        logo originale
 bin/step-report.mjs       report da riga di comando
 bin/aggiorna-logo.mjs     rigenera src/brand-logo.js dal logo (ritaglia la cornice)
+bin/genera-icone.mjs      icone dell'app (.png, .ico, .icns) dal logo
+bin/lib/png.mjs           PNG in casa: lettura, ricampionamento, ico e icns
 build.mjs                 genera la versione a file unico in dist/
 test/                     test automatici (motore, geometrie di riferimento, esportazioni, viewer)
 ```
@@ -133,7 +154,7 @@ attendibile; il numero di bordi aperti è sempre riportato.
 ## Test
 
 ```
-npm test        # 73 casi, senza dipendenze
+npm test        # 78 casi, senza dipendenze
 npm run lint    # eslint (installato globalmente: npx eslint@9 se manca)
 npm run build   # rigenera dist/visualizzatore-step.html (un test controlla che sia aggiornato)
 ```
@@ -142,6 +163,22 @@ I test coprono parser, geometria, esportazioni, viewer e **34 geometrie di
 riferimento** con valori analitici (cubo, cilindro, coni, sfere, tori, fori,
 cuciture, gusci invertiti, vuoti, B-spline razionali, rivoluzioni, gradi,
 pollici, assiemi): area e volume entro l'1 %, mesh chiuse.
+
+## App desktop (Windows, macOS, Linux)
+
+`desktop/main.js` apre la finestra e serve i file dell'app da un protocollo
+interno (`visualizzatore://app/…`) che legge dall'archivio compilato: nessuna
+porta di rete, nessun file sparso, tutto offline. La pagina gira in sandbox,
+senza Node e senza strumenti di sviluppo; la Content-Security-Policy consente
+solo il codice dell'app. Il menu di sistema aggiunge «Apri file STEP…»,
+l'associazione ai file `.stp`/`.step` (doppio clic sul file apre l'app) e la
+scelta della cartella a ogni esportazione.
+
+Protezioni attive nei pacchetti (interruttori di Electron, verificabili con
+`npx @electron/fuses read --app <app>`): codice solo da `app.asar`, verifica
+d'integrità dell'archivio (se modificato l'app non parte), `RunAsNode`,
+`NODE_OPTIONS` e `--inspect` disattivati. Vedi
+[DISTRIBUZIONE.md](DISTRIBUZIONE.md) per firma del codice e consegna ai clienti.
 
 ## Marchio e riferimenti
 

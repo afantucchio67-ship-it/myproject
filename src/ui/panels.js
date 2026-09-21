@@ -42,7 +42,11 @@ export const fmt = (v, dec = 2) => {
   return arrotondato.toLocaleString('it-IT', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 };
 export const vec = (v, dec = 2, sep = '  ') => (Array.isArray(v) ? v.map((x) => fmt(x, dec)).join(sep) : '—');
-export const intero = (v) => (typeof v === 'number' ? v.toLocaleString('it-IT') : String(v ?? '—'));
+// useGrouping esplicito: alcune versioni di ICU non raggruppano i numeri di
+// quattro cifre in italiano, e il risultato cambiava fra browser e app desktop
+export const intero = (v) => (typeof v === 'number'
+  ? v.toLocaleString('it-IT', { useGrouping: true, maximumFractionDigits: 0 })
+  : String(v ?? '—'));
 
 /** Nomi leggibili delle superfici STEP (il tipo originale resta nel tooltip). */
 const NOMI_SUPERFICI = {

@@ -14,7 +14,7 @@ export default [
         WebGL2RenderingContext: 'readonly', HTMLInputElement: 'readonly', HTMLElement: 'readonly', Node: 'readonly',
         localStorage: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', performance: 'readonly',
         process: 'readonly', globalThis: 'readonly', location: 'readonly', Image: 'readonly', Event: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly', DataView: 'readonly', ArrayBuffer: 'readonly',
-        Buffer: 'readonly',
+        Buffer: 'readonly', Response: 'readonly', Headers: 'readonly', Request: 'readonly', fetch: 'readonly',
       },
     },
     rules: {

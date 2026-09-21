@@ -1,18 +1,36 @@
 {
   "name": "visualizzatore-step",
+  "productName": "Visualizzatore STEP",
   "version": "1.0.0",
   "private": true,
-  "description": "Visualizzatore di file STEP (.stp/.step): geometria 3D e dati del file, senza dipendenze esterne",
+  "description": "Visualizzatore di file STEP (.stp/.step): geometria 3D e dati del file. App desktop per Windows e macOS e versione web senza dipendenze.",
   "type": "module",
   "scripts": {
     "start": "node server.mjs 8080",
+    "start:rete": "node server.mjs 8080 --rete",
     "report": "node bin/step-report.mjs",
     "test": "node --test",
-    "lint": "eslint src bin test build.mjs server.mjs",
+    "lint": "eslint src bin test desktop build.mjs server.mjs",
     "build": "node build.mjs",
-    "start:rete": "node server.mjs 8080 --rete"
+    "logo": "node bin/aggiorna-logo.mjs",
+    "icone": "node bin/genera-icone.mjs",
+    "app": "electron .",
+    "app:cartella": "npm run icone && electron-builder --dir",
+    "app:win": "npm run icone && electron-builder --win",
+    "app:mac": "npm run icone && electron-builder --mac",
+    "app:linux": "npm run icone && electron-builder --linux"
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "devDependencies": {
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3"
+  },
+  "author": {
+    "name": "Antonio Fantucchio",
+    "email": "a.fantucchio67@gmail.com",
+    "url": "mailto:a.fantucchio67@gmail.com"
+  },
+  "main": "desktop/main.js"
 }

@@ -138,6 +138,28 @@ function applicaPreferenze() {
 }
 
 /**
+ * Collega l'app desktop, quando presente: apertura file dal menu di sistema e
+ * dal doppio clic su un .stp, voce di menu «Comandi e scorciatoie».
+ */
+function collegaDesktop() {
+  const d = globalThis.visualizzatoreDesktop;
+  if (!d) return;
+  document.documentElement.dataset.desktop = 'si';
+  d.suApriFile(({ nome, dati }) => {
+    if (!dati) return;
+    apriByte(nome, dati instanceof Uint8Array ? dati : new Uint8Array(dati));
+  });
+  d.suMostraAiuto(() => apriAiuto());
+  // nell'app il pulsante usa la finestra di dialogo di sistema
+  $('#bottone-apri').onclick = () => d.apriDialogo();
+  $('#bottone-apri-vuoto').onclick = () => d.apriDialogo();
+  $('#stato-vuoto').onclick = (ev) => {
+    if (ev.target.closest('button')) return;
+    d.apriDialogo();
+  };
+}
+
+/**
  * Inserisce il logo (incorporato come data URI) in tutti i punti previsti e
  * lo usa anche come icona della pagina: funziona pure a file unico, offline.
  */
@@ -276,27 +298,7 @@ function apriFile(file) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = () => {
-    const text = decodificaTesto(reader.result);
-    if (!/^﻿?\s*ISO-10303-21\s*;/i.test(text.slice(0, 64))) {
-      log(`«${file.name}» non è un file STEP (manca l’intestazione ISO-10303-21). Il modello aperto resta invariato.`, 'errore');
-      mostraCaricamento(false);
-      return;
-    }
-    // il nome in testata cambia solo quando il nuovo modello e' pronto (caricaModello)
-    attesaRitassellazione = false;
-    ritassellazioneInSospeso = false;
-    dimensioneFile = file.size;
-    ultimaRichiesta = { text, nome: file.name, tolleranza: stato.tolleranza };
-    if (worker) {
-      worker.postMessage({ type: 'load', text, nome: file.name, tolleranza: stato.tolleranza });
-    } else {
-      elaboraInPagina(text, file.name, stato.tolleranza, false).catch((err) => {
-        mostraCaricamento(false);
-        log('Errore durante la lettura: ' + err.message, 'errore');
-      });
-    }
-  };
+  reader.onload = () => elabora(reader.result, file.name, file.size);
   reader.onerror = () => {
     mostraCaricamento(false);
     log('Impossibile leggere il file.', 'errore');
@@ -306,11 +308,48 @@ function apriFile(file) {
 }
 
 /**
+ * Apre un file gia' letto in memoria: usato dall'app desktop quando il file
+ * arriva dal menu, dalla riga di comando o dal doppio clic su un .stp.
+ */
+function apriByte(nome, byte) {
+  if (stato.caricamento) {
+    log('Attendi la fine dell’elaborazione in corso.', 'attenzione');
+    return;
+  }
+  mostraCaricamento(true, 0.01, `lettura di ${nome}`);
+  elabora(byte, nome, byte.byteLength || 0);
+}
+
+/** Avvia l'elaborazione del contenuto letto (buffer o vista su byte). */
+function elabora(contenuto, nome, dimensione) {
+  const text = decodificaTesto(contenuto);
+  if (!/^﻿?\s*ISO-10303-21\s*;/i.test(text.slice(0, 64))) {
+    log(`«${nome}» non è un file STEP (manca l’intestazione ISO-10303-21). Il modello aperto resta invariato.`, 'errore');
+    mostraCaricamento(false);
+    return;
+  }
+  // il nome in testata cambia solo quando il nuovo modello e' pronto (caricaModello)
+  attesaRitassellazione = false;
+  ritassellazioneInSospeso = false;
+  dimensioneFile = dimensione;
+  ultimaRichiesta = { text, nome, tolleranza: stato.tolleranza };
+  if (worker) {
+    worker.postMessage({ type: 'load', text, nome, tolleranza: stato.tolleranza });
+  } else {
+    elaboraInPagina(text, nome, stato.tolleranza, false).catch((err) => {
+      mostraCaricamento(false);
+      log('Errore durante la lettura: ' + err.message, 'errore');
+    });
+  }
+}
+
+/**
  * I file STEP sono in ASCII, ma i nomi possono contenere accenti: si prova
  * UTF-8 (rigoroso) e si ripiega su Windows-1252, togliendo il BOM.
+ * Accetta un ArrayBuffer oppure una vista su byte (app desktop).
  */
-function decodificaTesto(buffer) {
-  let bytes = new Uint8Array(buffer);
+function decodificaTesto(contenuto) {
+  let bytes = contenuto instanceof Uint8Array ? contenuto : new Uint8Array(contenuto);
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -1373,6 +1412,7 @@ export function avvia() {
   collegaComandi();
   collegaInterazione();
   applicaPreferenze();
+  collegaDesktop();
   impostaSezione();
   aggiornaPannelli();
   new ResizeObserver(() => { needsRender = true; }).observe(canvas);

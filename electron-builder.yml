@@ -1,0 +1,101 @@
+# Impacchettamento dell'app desktop (Electron).
+#  npm run app:win     installatore + versione portatile per Windows
+#  npm run app:mac     .dmg e .zip per macOS (Intel e Apple Silicon)
+#  npm run app:linux   AppImage
+# I risultati finiscono in dist-app/.
+appId: it.fantucchio.visualizzatore-step
+# productName arriva da package.json (vale anche per `npm run app`)
+copyright: © Antonio Fantucchio — Software Engineer
+artifactName: ${productName}-${version}-${arch}.${ext}
+
+directories:
+  output: dist-app
+  buildResources: build
+
+# solo i file dell'applicazione: niente sorgenti di sviluppo, test o strumenti
+files:
+  - index.html
+  - css/**/*
+  - src/**/*
+  - desktop/**/*
+  - build/icona.png
+  - package.json
+  - '!**/*.map'
+  - '!**/*.test.*'
+
+# tutto il codice finisce in un archivio app.asar: l'app non gira da file sparsi
+asar: true
+
+# interruttori di sicurezza di Electron: l'app non puo' essere usata come
+# runtime Node, non accetta NODE_OPTIONS ne' --inspect, carica solo da asar e
+# verifica l'integrita' dell'archivio (se qualcuno lo modifica, non parte)
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+
+fileAssociations:
+  - ext: stp
+    name: Modello STEP
+    description: Modello 3D STEP (ISO 10303-21)
+    role: Viewer
+    icon: build/icona
+  - ext: step
+    name: Modello STEP
+    description: Modello 3D STEP (ISO 10303-21)
+    role: Viewer
+    icon: build/icona
+
+win:
+  icon: build/icona.ico
+  # firma del codice: se esistono le variabili CSC_LINK e CSC_KEY_PASSWORD
+  # electron-builder firma automaticamente (vedi DISTRIBUZIONE.md)
+  target:
+    - target: nsis      # installatore (richiede Windows o wine)
+      arch: [x64]
+    - target: portable  # eseguibile unico, senza installazione (idem)
+      arch: [x64]
+    - target: zip       # cartella pronta all'uso: si crea da qualsiasi sistema
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Visualizzatore STEP
+  artifactName: ${productName}-${version}-installatore.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portatile.${ext}
+
+mac:
+  icon: build/icona.icns
+  category: public.app-category.graphics-design
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+
+dmg:
+  title: ${productName}
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  icon: build/icona.png
+  category: Graphics
+  synopsis: Visualizzatore di file STEP (geometria 3D e dati)
+  target:
+    - target: AppImage
+      arch: [x64]

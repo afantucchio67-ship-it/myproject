@@ -110,7 +110,7 @@ html = html.replace('<link rel="stylesheet" href="css/app.css">', () => `<style>
 const script =
   `<script type="module">\n${caricatore}\n${[...moduli.values()].join('\n')}\n` +
   `__richiedi('${ingresso}').avvia();\n</script>`;
-html = html.replace(/<script type="module">[\s\S]*?<\/script>/, () => script);
+html = html.replace(/<script type="module"[^>]*>[\s\S]*?<\/script>/, () => script);
 html = html.replace('<title>', () => '<!-- versione a file unico: generata da build.mjs -->\n<title>');
 
 mkdirSync(join(radice, 'dist'), { recursive: true });
