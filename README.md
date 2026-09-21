@@ -1,5 +1,8 @@
 # Visualizzatore STEP — geometria e dati
 
+**Antonio Fantucchio** — Software Engineer
+[a.fantucchio67@gmail.com](mailto:a.fantucchio67@gmail.com) · +39 392 0021816
+
 Applicazione per aprire file **STEP** (`.stp`, `.step`, ISO 10303-21) e leggerne
 tutto il contenuto: il modello **3D** navigabile e i **dati** presenti nel file
 (intestazione, unità, struttura di assieme, prodotti, proprietà, persone e
@@ -94,7 +97,11 @@ src/step/esploratore.js   ricerca e scheda delle entità (usato da worker e pagi
 src/viewer/               matrici, camera orbitale, renderer WebGL, selezione a griglia
 src/worker/               lettura e tassellazione in un web worker
 src/ui/                   pannelli, esportazioni, applicazione
+src/brand.js              nome, ruolo e contatti: unico punto da modificare
+src/brand-logo.js         logo incorporato (generato, non si modifica a mano)
+assets/logo-af.png        logo originale
 bin/step-report.mjs       report da riga di comando
+bin/aggiorna-logo.mjs     rigenera src/brand-logo.js dal logo (ritaglia la cornice)
 build.mjs                 genera la versione a file unico in dist/
 test/                     test automatici (motore, geometrie di riferimento, esportazioni, viewer)
 ```
@@ -126,7 +133,7 @@ attendibile; il numero di bordi aperti è sempre riportato.
 ## Test
 
 ```
-npm test        # 71 casi, senza dipendenze
+npm test        # 73 casi, senza dipendenze
 npm run lint    # eslint (installato globalmente: npx eslint@9 se manca)
 npm run build   # rigenera dist/visualizzatore-step.html (un test controlla che sia aggiornato)
 ```
@@ -135,6 +142,36 @@ I test coprono parser, geometria, esportazioni, viewer e **34 geometrie di
 riferimento** con valori analitici (cubo, cilindro, coni, sfere, tori, fori,
 cuciture, gusci invertiti, vuoti, B-spline razionali, rivoluzioni, gradi,
 pollici, assiemi): area e volume entro l'1 %, mesh chiuse.
+
+## Marchio e riferimenti
+
+L'applicazione è firmata **Antonio Fantucchio — Software Engineer**. I riferimenti
+restano visibili senza appesantire l'interfaccia:
+
+- **testata**: logo e firma accanto al nome dell'applicazione;
+- **schermata iniziale**: logo grande, nome, ruolo, e-mail e telefono cliccabili;
+- **barra di stato**: logo, nome e contatti sempre presenti (sulle finestre strette
+  resta il nome, i contatti restano nella finestra «Aiuto»);
+- **finestra Aiuto**: scheda completa con logo e contatti;
+- **icona della pagina** (favicon): il logo.
+
+Anche tutto ciò che esce dall'applicazione è firmato: report stampabile (logo in
+testata e contatti a piè di pagina), immagini PNG (firma discreta in basso a
+destra), report JSON (blocco `generatoDa`), CSV (riga finale), STL (intestazione
+binaria e riga dopo `endsolid`), OBJ e MTL (righe di commento), riepilogo da riga
+di comando.
+
+**Per cambiare nome, ruolo o contatti** basta modificare `src/brand.js`. **Per
+cambiare il logo**: sostituisci `assets/logo-af.png` (PNG a 8 bit, RGB o RGBA) e
+lancia
+
+```
+node bin/aggiorna-logo.mjs      # rigenera src/brand-logo.js
+npm run build                   # aggiorna dist/visualizzatore-step.html
+```
+
+Il logo viene incorporato come data URI (cornice uniforme ritagliata): il file
+unico resta autosufficiente e funziona senza rete.
 
 ## Limiti noti
 

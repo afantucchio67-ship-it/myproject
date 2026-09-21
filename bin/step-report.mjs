@@ -13,6 +13,7 @@ import { basename } from 'node:path';
 import { isStepText, parseStep } from '../src/step/parser.js';
 import { buildModel } from '../src/step/model.js';
 import { entitaCSV, facceCSV, partiCSV, reportJSON } from '../src/ui/exporters.js';
+import { MARCHIO, rigaContatti } from '../src/brand.js';
 
 const USO = 'Uso: node bin/step-report.mjs <file.stp> [...] [--json] [--csv facce|parti|entita] [--tolleranza 0.1]';
 
@@ -71,6 +72,10 @@ function decodifica(buffer) {
 
 const fmt = (v, d = 2) =>
   typeof v === 'number' ? v.toLocaleString('it-IT', { minimumFractionDigits: d, maximumFractionDigits: d }) : String(v);
+
+// intestazione solo nel riepilogo leggibile: JSON e CSV restano elaborabili
+// (la firma e' comunque dentro il JSON e in coda al CSV)
+if (!opzioni.json && !opzioni.csv) console.log(`${MARCHIO.applicazione} — ${rigaContatti(' · ')}`);
 
 let errori = 0;
 for (const percorso of opzioni.files) {

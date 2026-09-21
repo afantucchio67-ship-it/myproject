@@ -3,13 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visualizzatore STEP</title>
+<title>Visualizzatore STEP — Antonio Fantucchio</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231d2027'/%3E%3Cpath d='M16 4 27 10v12L16 28 5 22V10z' fill='none' stroke='%234c9aff' stroke-width='2'/%3E%3Cpath d='M5 10l11 6 11-6M16 16v12' fill='none' stroke='%234c9aff' stroke-width='1.4' opacity='.75'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header class="barra-alta">
-  <div class="marchio"><span class="logo" aria-hidden="true"></span>Visualizzatore <strong>STEP</strong></div>
+  <div class="marchio">
+    <img class="marchio-logo" alt="Logo Antonio Fantucchio" width="32" height="32">
+    <span class="marchio-testo">
+      <span class="marchio-app">Visualizzatore <strong>STEP</strong></span>
+      <span class="marchio-firma">Antonio Fantucchio<span class="marchio-ruolo"> · Software Engineer</span></span>
+    </span>
+  </div>
   <button id="bottone-apri" class="principale">Apri file…</button>
   <input id="file-input" type="file" accept=".stp,.step,.STP,.STEP,.p21" multiple hidden>
   <span id="nome-file" class="nome-file">nessun file aperto</span>
@@ -138,13 +144,19 @@
 
     <div id="stato-vuoto" class="stato-vuoto">
       <div class="stato-vuoto-card">
-        <div class="stato-vuoto-icona" aria-hidden="true">
-          <svg viewBox="0 0 64 64" width="56" height="56"><path d="M32 6 56 19v26L32 58 8 45V19z" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M8 19l24 13 24-13M32 32v26" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".7"/></svg>
-        </div>
+        <img class="marchio-logo marchio-logo-grande" alt="Logo Antonio Fantucchio" width="76" height="76">
         <h2>Trascina qui un file STEP</h2>
         <p>Formati <code>.stp</code> e <code>.step</code>. Il file viene letto sul tuo computer e non lascia il browser.</p>
         <button id="bottone-apri-vuoto" class="principale">Scegli un file…</button>
         <p class="tenue">Poi: trascina per ruotare · rotellina per ingrandire · clic su una faccia per interrogarla</p>
+        <div class="marchio-blocco">
+          <span class="marchio-nome">Antonio Fantucchio</span>
+          <span class="marchio-ruolo-riga">Software Engineer</span>
+          <span class="marchio-contatti">
+            <a href="mailto:a.fantucchio67@gmail.com">a.fantucchio67@gmail.com</a>
+            <a href="tel:+393920021816">+39 392 0021816</a>
+          </span>
+        </div>
       </div>
     </div>
 
@@ -172,6 +184,12 @@
 <footer class="barra-stato">
   <span id="stato-messaggio" class="stato-messaggio">avvio…</span>
   <span id="barra-stato-dati" class="dati"></span>
+  <span class="marchio-stato" title="Antonio Fantucchio · Software Engineer">
+    <img class="marchio-logo marchio-logo-mini" alt="" width="16" height="16">
+    <span class="marchio-nome">Antonio Fantucchio</span>
+    <a class="marchio-link" href="mailto:a.fantucchio67@gmail.com">a.fantucchio67@gmail.com</a>
+    <a class="marchio-link" href="tel:+393920021816">+39 392 0021816</a>
+  </span>
 </footer>
 
 <div id="aiuto" class="dialogo" hidden>
@@ -195,6 +213,18 @@
       </tbody>
     </table>
     <p class="nota">Nelle tabelle: clic = seleziona ed evidenzia nel 3D · doppio clic = inquadra. I file restano sul tuo computer.</p>
+    <div class="marchio-aiuto">
+      <img class="marchio-logo marchio-logo-medio" alt="Logo Antonio Fantucchio" width="56" height="56">
+      <div class="marchio-aiuto-testo">
+        <span class="marchio-nome">Antonio Fantucchio</span>
+        <span class="marchio-ruolo-riga">Software Engineer</span>
+        <span class="marchio-contatti">
+          <a href="mailto:a.fantucchio67@gmail.com">a.fantucchio67@gmail.com</a>
+          <a href="tel:+393920021816">+39 392 0021816</a>
+        </span>
+        <span class="tenue">Visualizzatore STEP · sviluppato e mantenuto da Antonio Fantucchio</span>
+      </div>
+    </div>
     <div class="riga-bottoni"><button id="chiudi-aiuto" class="principale">Chiudi</button></div>
   </div>
 </div>

@@ -5,6 +5,7 @@ import { parseStep } from '../src/step/parser.js';
 import { buildModel } from '../src/step/model.js';
 import { entitaCSV, esportaOBJ, esportaSTL, facceCSV, partiCSV, reportHTML, reportJSON } from '../src/ui/exporters.js';
 import { cercaEntita, entitaPerTipo, infoEntita, testoEntita } from '../src/step/esploratore.js';
+import { MARCHIO } from '../src/brand.js';
 import { cuboStep } from './fixtures.mjs';
 
 const modello = () => {
@@ -86,4 +87,42 @@ test("esploratore: testo, riferimenti e ricerca per tipo, id e testo", () => {
   assert.ok(cercaEntita(f, 'cubo di prova').totale >= 1, 'ricerca nel testo');
   assert.equal(infoEntita(f, 999999), null);
   assert.equal(testoEntita(f.entities.get(info.id)), info.testo);
+});
+
+test('i riferimenti del marchio sono presenti in ogni esportazione', () => {
+  const m = modello();
+  const j = JSON.parse(reportJSON(m));
+  assert.equal(j.generatoDa.autore, MARCHIO.nome);
+  assert.equal(j.generatoDa.email, MARCHIO.email);
+  assert.equal(j.generatoDa.telefono, MARCHIO.telefono);
+
+  // CSV: la firma sta in coda, l'intestazione resta la prima riga
+  for (const csv of [partiCSV(m), facceCSV(m), entitaCSV(m)]) {
+    const righe = csv.split('\r\n');
+    assert.ok(righe[0].includes(';'), 'prima riga = intestazione');
+    assert.ok(righe.at(-1).startsWith(`Generato da;${MARCHIO.nome}`), righe.at(-1));
+  }
+
+  // STL: intestazione di 80 byte nel binario, firma dopo endsolid nell'ASCII
+  const testa = new TextDecoder().decode(new Uint8Array(esportaSTL(m, { binario: true }), 0, 80));
+  assert.ok(testa.includes(MARCHIO.nome), testa);
+  const ascii = esportaSTL(m);
+  assert.match(ascii, /\nendsolid [^\n]*\n; Antonio Fantucchio - Software Engineer/);
+
+  const { obj, mtl } = esportaOBJ(m);
+  assert.ok(obj.startsWith(`# ${MARCHIO.applicazione} - ${MARCHIO.nome}`), obj.slice(0, 80));
+  assert.ok(obj.includes(MARCHIO.email) && mtl.includes(MARCHIO.email));
+
+  // report stampabile: logo incorporato, contatti in testata e in piè di pagina
+  const html = reportHTML(m, null, { nomeFile: 'cubo.stp' });
+  assert.ok(html.includes('data:image/png;base64,'), 'logo incorporato');
+  assert.ok(html.includes(MARCHIO.nome) && html.includes(MARCHIO.email) && html.includes(MARCHIO.telefono));
+  assert.ok(html.includes('marchio-testata') && html.includes('marchio-pie'));
+});
+
+test('il logo incorporato è un PNG valido e leggero', () => {
+  assert.match(MARCHIO.logo, /^data:image\/png;base64,[A-Za-z0-9+/=]+$/);
+  const byte = Buffer.from(MARCHIO.logo.split(',')[1], 'base64');
+  assert.deepEqual([...byte.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], 'firma PNG');
+  assert.ok(byte.length < 120 * 1024, `logo di ${byte.length} byte: troppo pesante per il file unico`);
 });

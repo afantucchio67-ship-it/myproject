@@ -13,6 +13,8 @@
   --ok: #4ec08a;
   --attenzione: #e8c45c;
   --errore: #ef6f6f;
+  --marchio: #d3a86f;        /* bronzo del logo: usato per la firma */
+  --marchio-bordo: #4a4238;
   --ombra: 0 6px 22px rgba(0, 0, 0, 0.42);
   --raggio: 7px;
   --barra-h: 46px;
@@ -35,6 +37,8 @@
   --ok: #157f52;
   --attenzione: #8a6a08;
   --errore: #bb2d2d;
+  --marchio: #8a5a22;
+  --marchio-bordo: #d8cdbd;
   --ombra: 0 6px 18px rgba(20, 24, 35, 0.14);
   color-scheme: light;
 }
@@ -133,13 +137,49 @@ input.ricerca { flex: 1; cursor: text; }
   flex: none;
 }
 
-.marchio { display: flex; align-items: center; gap: 8px; font-size: 15px; letter-spacing: 0.2px; white-space: nowrap; }
+.marchio { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
 .marchio strong { color: var(--accento); }
-.logo {
-  width: 18px; height: 18px; border-radius: 4px;
-  background: linear-gradient(135deg, var(--accento), #7cc4ff);
-  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+.marchio-testo { display: flex; flex-direction: column; justify-content: center; line-height: 1.15; }
+.marchio-app { font-size: 15px; letter-spacing: 0.2px; }
+.marchio-firma {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--marchio);
 }
+
+/* logo del marchio: la sorgente e' incorporata da src/brand.js */
+.marchio-logo {
+  display: block;
+  width: 32px; height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--marchio-bordo);
+  object-fit: cover;
+  background: #3b3937;
+}
+.marchio-logo-mini { width: 16px; height: 16px; border-radius: 3px; }
+.marchio-logo-medio { width: 56px; height: 56px; border-radius: 8px; }
+.marchio-logo-grande { width: 76px; height: 76px; border-radius: 10px; margin: 0 auto 10px; box-shadow: var(--ombra); }
+
+/* firma nella schermata iniziale e nella finestra Aiuto */
+.marchio-nome { color: var(--testo); font-weight: 600; letter-spacing: 0.2px; }
+.marchio-ruolo-riga { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--marchio); }
+.marchio-contatti { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: center; }
+.marchio-contatti a { color: var(--testo-tenue); text-decoration: none; border-bottom: 1px dotted var(--bordo-forte); }
+.marchio-contatti a:hover { color: var(--accento); border-bottom-color: var(--accento); }
+.marchio-blocco {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px solid var(--bordo);
+  font-size: 12px;
+}
+.marchio-aiuto {
+  display: flex; align-items: center; gap: 14px;
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--bordo);
+}
+.marchio-aiuto-testo { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.marchio-aiuto-testo .marchio-contatti { justify-content: flex-start; }
 .nome-file {
   color: var(--testo-tenue);
   max-width: 34vw;
@@ -457,6 +497,17 @@ p.ok { color: var(--ok); }
 .stato-messaggio.attenzione { color: var(--attenzione); }
 .stato-messaggio.errore { color: var(--errore); }
 .barra-stato .dati { color: var(--testo-tenue); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.marchio-stato {
+  display: flex; align-items: center; gap: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--bordo);
+  color: var(--testo-tenue);
+  white-space: nowrap;
+  flex: none;
+}
+.marchio-stato .marchio-nome { font-size: 11.5px; }
+.marchio-link { color: var(--testo-tenue); text-decoration: none; }
+.marchio-link:hover { color: var(--accento); text-decoration: underline; }
 
 /* --------------------------------------------------------------- dialogo */
 
@@ -500,9 +551,14 @@ p.ok { color: var(--ok); }
   .dettaglio-box { width: 260px; }
   .aiuto-breve { display: none; }
   .barra-stato .dati { display: none; }
+  /* su finestre strette resta il nome, i contatti sono nella finestra Aiuto */
+  .marchio-link { display: none; }
+  .marchio-firma .marchio-ruolo { display: none; }
 }
 
 @media print {
-  .barra-alta, .nastro, .laterale, .maniglia, .barra-stato, .aiuto-breve, .suggerimento { display: none !important; }
+  .barra-alta, .nastro, .laterale, .maniglia, .aiuto-breve, .suggerimento { display: none !important; }
+  .barra-stato { border: none; }
+  .barra-stato .stato-messaggio, .barra-stato .dati { display: none !important; }
   .area-vista { position: static; }
 }

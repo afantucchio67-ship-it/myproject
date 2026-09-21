@@ -3,6 +3,7 @@
  * Funzioni pure (usate anche dalla riga di comando), tranne `scarica`.
  */
 
+import { MARCHIO, firmaGeneratore, rigaContatti } from '../brand.js';
 import { transformDir, transformPoint } from '../viewer/mat4.js';
 
 export function scarica(nomeFile, contenuto, tipo = 'text/plain') {
@@ -72,6 +73,13 @@ export function reportJSON(model) {
   });
   return JSON.stringify(
     {
+      generatoDa: {
+        applicazione: MARCHIO.applicazione,
+        autore: MARCHIO.nome,
+        ruolo: MARCHIO.ruolo,
+        email: MARCHIO.email,
+        telefono: MARCHIO.telefono,
+      },
       file: model.nomeFileCaricato || model.header.nomeFile,
       unitaDiLunghezza: unita(model),
       intestazione: model.header,
@@ -105,7 +113,9 @@ function csvRighe(righe) {
     return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   // BOM: Excel riconosce l'UTF-8 e il separatore ';' delle impostazioni italiane
-  return '﻿' + righe.map((r) => r.map(esc).join(';')).join('\r\n');
+  // la firma va in coda, cosi' l'intestazione resta la prima riga per i filtri
+  const conFirma = [...righe, [], ['Generato da', MARCHIO.nome, MARCHIO.ruolo, MARCHIO.email, MARCHIO.telefono]];
+  return '﻿' + conFirma.map((r) => r.map(esc).join(';')).join('\r\n');
 }
 
 /** CSV con una riga per faccia (utile per preventivi e controlli). */
@@ -176,7 +186,8 @@ export function esportaSTL(model, opts = {}) {
     for (const p of parti) n += p.mesh.indices.length / 3;
     const buf = new ArrayBuffer(84 + n * 50);
     const dv = new DataView(buf);
-    const intestazione = `Visualizzatore STEP - ${model.nomeFileCaricato || 'modello'}`.slice(0, 79);
+    // l'intestazione STL e' di 80 byte: nome del file e firma, in ASCII
+    const intestazione = `${model.nomeFileCaricato || 'modello'} - ${firmaGeneratore()}`.slice(0, 79);
     for (let i = 0; i < intestazione.length; i++) dv.setUint8(i, intestazione.charCodeAt(i) & 0x7f);
     dv.setUint32(80, n, true);
     let o = 84;
@@ -192,7 +203,8 @@ export function esportaSTL(model, opts = {}) {
     }
     return buf;
   }
-  const out = ['solid ' + (model.nomeFileCaricato || 'modello').replace(/\s+/g, '_')];
+  const nomeSolido = (model.nomeFileCaricato || 'modello').replace(/\s+/g, '_');
+  const out = [`solid ${nomeSolido}`];
   for (const { v, n } of triangoliMondo(parti)) {
     out.push(`  facet normal ${n.map((x) => x.toExponential(6)).join(' ')}`);
     out.push('    outer loop');
@@ -200,15 +212,20 @@ export function esportaSTL(model, opts = {}) {
     out.push('    endloop');
     out.push('  endfacet');
   }
-  out.push('endsolid');
+  // dopo `endsolid` il file e' concluso: la firma non disturba i lettori STL
+  out.push(`endsolid ${nomeSolido}`, `; ${rigaContatti(' - ')}`, '');
   return out.join('\n');
 }
 
 /** OBJ della scena, un gruppo per parte, con materiali (colori) in linea. opts: { soloVisibili }. */
 export function esportaOBJ(model, opts = {}) {
   const parti = partiDaEsportare(model, opts);
-  const out = ['# generato dal Visualizzatore STEP', `# unita': ${unita(model)}`];
-  const mtl = [];
+  const out = [
+    `# ${MARCHIO.applicazione} - ${MARCHIO.nome}, ${MARCHIO.ruolo}`,
+    `# ${MARCHIO.email} - ${MARCHIO.telefono}`,
+    `# file: ${model.nomeFileCaricato || 'modello'} - unita': ${unita(model)}`,
+  ];
+  const mtl = [`# ${rigaContatti(' - ')}`, ''];
   let offset = 1;
   parti.forEach((p, k) => {
     const { positions, indices, normals } = p.mesh;
@@ -276,10 +293,33 @@ export function reportHTML(model, immagineDataUrl, opts = {}) {
   .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
   img { max-width: 100%; border: 1px solid #cbd0da; border-radius: 6px; margin: 6px 0 4px; }
   small { color: #5c6373; }
-  @media print { body { margin: 10mm; } h2 { break-after: avoid; } table { break-inside: auto; } tr { break-inside: avoid; } }
+  .marchio-testata { display: flex; align-items: center; gap: 14px; border-bottom: 2px solid #3b3937; padding-bottom: 10px; margin-bottom: 14px; }
+  .marchio-testata img { width: 54px; height: 54px; border-radius: 8px; border: 1px solid #cbd0da; margin: 0; flex: none; }
+  .marchio-testata .nome { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+  .marchio-testata .ruolo { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #8a5a22; }
+  .marchio-testata .contatti { font-size: 11px; color: #5c6373; }
+  .marchio-testata .spazio { margin-left: auto; text-align: right; font-size: 11px; color: #5c6373; }
+  .marchio-pie { margin-top: 26px; padding-top: 8px; border-top: 1px solid #cbd0da; font-size: 10.5px; color: #5c6373; display: flex; gap: 10px; }
+  .marchio-pie .autore { font-weight: 600; color: #1a1d24; }
+  @media print {
+    body { margin: 10mm; }
+    h2 { break-after: avoid; }
+    table { break-inside: auto; }
+    tr { break-inside: avoid; }
+    .marchio-testata, .marchio-pie { break-inside: avoid; }
+  }
 </style></head><body>
+<div class="marchio-testata">
+  ${MARCHIO.logo ? `<img src="${MARCHIO.logo}" alt="${escHtml(MARCHIO.nome)}">` : ''}
+  <div>
+    <div class="nome">${escHtml(MARCHIO.nome)}</div>
+    <div class="ruolo">${escHtml(MARCHIO.ruolo)}</div>
+    <div class="contatti">${escHtml(MARCHIO.email)} · ${escHtml(MARCHIO.telefono)}</div>
+  </div>
+  <div class="spazio">${escHtml(MARCHIO.applicazione)}<br>report del ${escHtml(data)}</div>
+</div>
 <h1>${escHtml(opts.nomeFile || model.nomeFileCaricato || 'Modello STEP')}</h1>
-<div class="sotto">Report generato il ${data} · Visualizzatore STEP · unità: ${escHtml(u)}</div>
+<div class="sotto">Report generato il ${data} · ${escHtml(MARCHIO.applicazione)} · unità: ${escHtml(u)}</div>
 ${immagineDataUrl ? `<img src="${immagineDataUrl}" alt="modello">` : ''}
 <div class="griglia">
 <div><h2>Misure complessive</h2>
@@ -311,6 +351,13 @@ ${org.persone.length || org.approvazioni.length ? `<h2>Organizzazione</h2>${tab(
   ...org.sicurezza.map((c) => ['classificazione', escHtml(c.livello)]),
 ]))}` : ''}
 ${model.diagnostics.length ? `<h2>Segnalazioni</h2><ul>${model.diagnostics.slice(0, 50).map((d) => `<li>${escHtml(d)}</li>`).join('')}</ul>` : ''}
+<div class="marchio-pie">
+  <span class="autore">${escHtml(MARCHIO.nome)}</span>
+  <span>${escHtml(MARCHIO.ruolo)}</span>
+  <span>${escHtml(MARCHIO.email)}</span>
+  <span>${escHtml(MARCHIO.telefono)}</span>
+  <span style="margin-left:auto">${escHtml(MARCHIO.applicazione)}</span>
+</div>
 <script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));<\/script>
 </body></html>`;
 }

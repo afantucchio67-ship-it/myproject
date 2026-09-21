@@ -3,6 +3,7 @@
  * ricavati dal file. Nessuna dipendenza esterna.
  */
 
+import { MARCHIO } from '../brand.js';
 import { OrbitCamera } from '../viewer/camera.js';
 import { PALETTE, Renderer } from '../viewer/renderer.js';
 import { pick, verticeVicino } from '../viewer/picking.js';
@@ -134,6 +135,22 @@ function applicaPreferenze() {
   }
   if (p.larghezzaPannello) $('#laterale').style.width = `${p.larghezzaPannello}px`;
   applicaTema();
+}
+
+/**
+ * Inserisce il logo (incorporato come data URI) in tutti i punti previsti e
+ * lo usa anche come icona della pagina: funziona pure a file unico, offline.
+ */
+function applicaMarchio() {
+  document.querySelectorAll('img.marchio-logo').forEach((img) => { img.src = MARCHIO.logo; });
+  let icona = document.querySelector('link[rel="icon"]');
+  if (!icona) {
+    icona = document.createElement('link');
+    icona.rel = 'icon';
+    document.head.appendChild(icona);
+  }
+  icona.type = 'image/png';
+  icona.href = MARCHIO.logo;
 }
 
 function applicaTema() {
@@ -684,45 +701,112 @@ function testoMisura() {
     (renderer.esplosione > 0 ? ' (vista esplosa)' : '');
 }
 
-/**
- * L'etichetta della misura e' un elemento HTML sopra il canvas, quindi non
- * compare nello screenshot WebGL: la si ridisegna sull'immagine con un canvas 2D.
- */
-function conEtichettaMisura(url) {
-  const pts = stato.misura.punti;
-  if (!stato.misura.attiva || pts.length < 2) return Promise.resolve(url);
+/** Carica un'immagine da URL (null se non si carica). */
+function caricaImmagine(url) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => {
-      try {
-        const c = document.createElement('canvas');
-        c.width = img.width;
-        c.height = img.height;
-        const ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const mid = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2, (pts[0][2] + pts[1][2]) / 2];
-        const s = camera.toScreen(mid, img.width, img.height);
-        if (s) {
-          const dim = Math.max(12, Math.round(img.height / 45));
-          const testo = `${fmt(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]), 3)} ${um()}`;
-          ctx.font = `600 ${dim}px system-ui, Segoe UI, sans-serif`;
-          const larghezza = ctx.measureText(testo).width + dim;
-          const x = Math.min(Math.max(0, s[0] + dim * 0.6), img.width - larghezza);
-          const y = Math.min(Math.max(dim * 1.6, s[1] - dim * 0.6), img.height);
-          ctx.fillStyle = 'rgba(20, 24, 32, 0.85)';
-          ctx.fillRect(x, y - dim * 1.4, larghezza, dim * 1.8);
-          ctx.fillStyle = '#ffb347';
-          ctx.textBaseline = 'alphabetic';
-          ctx.fillText(testo, x + dim * 0.5, y);
-        }
-        resolve(c.toDataURL('image/png'));
-      } catch {
-        resolve(url);
-      }
-    };
-    img.onerror = () => resolve(url);
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
     img.src = url;
   });
+}
+
+/**
+ * Rifinisce lo screenshot WebGL con un canvas 2D: l'etichetta della misura e la
+ * firma (logo e riferimenti), che sono elementi HTML e non finirebbero nel PNG.
+ * `sfondo` ('tema' | 'bianco' | 'trasparente') decide i colori della firma.
+ */
+async function componiImmagine(url, sfondo = 'tema', opts = {}) {
+  const [base, logo] = await Promise.all([caricaImmagine(url), caricaImmagine(MARCHIO.logo)]);
+  if (!base) return url;
+  try {
+    const c = document.createElement('canvas');
+    c.width = base.width;
+    c.height = base.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(base, 0, 0);
+    disegnaEtichettaMisura(ctx, c.width, c.height);
+    // nel report la firma e' gia' in testata: non serve anche sull'immagine
+    if (opts.firma !== false) disegnaFirma(ctx, c.width, c.height, logo, sfondo);
+    return c.toDataURL('image/png');
+  } catch {
+    return url; // canvas non disponibile: si esporta l'immagine cosi' com'e'
+  }
+}
+
+/** Etichetta con la distanza misurata, nella stessa posizione che ha a schermo. */
+function disegnaEtichettaMisura(ctx, w, h) {
+  const pts = stato.misura.punti;
+  if (!stato.misura.attiva || pts.length < 2) return;
+  const mid = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2, (pts[0][2] + pts[1][2]) / 2];
+  const s = camera.toScreen(mid, w, h);
+  if (!s) return;
+  const dim = Math.max(12, Math.round(h / 45));
+  const testo = `${fmt(Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]), 3)} ${um()}`;
+  ctx.font = `600 ${dim}px system-ui, Segoe UI, sans-serif`;
+  const larghezza = ctx.measureText(testo).width + dim;
+  const x = Math.min(Math.max(0, s[0] + dim * 0.6), w - larghezza);
+  const y = Math.min(Math.max(dim * 1.6, s[1] - dim * 0.6), h);
+  ctx.fillStyle = 'rgba(20, 24, 32, 0.85)';
+  ctx.fillRect(x, y - dim * 1.4, larghezza, dim * 1.8);
+  ctx.fillStyle = '#ffb347';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(testo, x + dim * 0.5, y);
+}
+
+/** Firma discreta in basso a destra: logo, nome e contatti. */
+function disegnaFirma(ctx, w, h, logo, sfondo) {
+  const scala = Math.max(1, Math.min(w / 900, 2.2));
+  const lato = Math.round(30 * scala);
+  const margine = Math.round(14 * scala);
+  const dimNome = Math.round(12.5 * scala);
+  const dimRiga = Math.round(10 * scala);
+  const chiaro = sfondo === 'bianco' || (sfondo === 'tema' && stato.tema === 'chiaro');
+  const colNome = chiaro ? '#1a1d24' : '#f2f3f7';
+  const colRiga = chiaro ? '#5c6373' : '#c6cbd7';
+  ctx.font = `600 ${dimNome}px system-ui, Segoe UI, sans-serif`;
+  const wNome = ctx.measureText(MARCHIO.nome).width;
+  ctx.font = `${dimRiga}px system-ui, Segoe UI, sans-serif`;
+  const riga = `${MARCHIO.ruolo} · ${MARCHIO.email} · ${MARCHIO.telefono}`;
+  const wRiga = ctx.measureText(riga).width;
+  const spazio = Math.round(9 * scala);
+  const larghezza = (logo ? lato + spazio : 0) + Math.max(wNome, wRiga);
+  const altezza = Math.max(lato, dimNome + dimRiga + Math.round(6 * scala));
+  const x = w - margine - larghezza;
+  const y = h - margine - altezza;
+  if (x < 0 || y < 0) return; // immagine troppo piccola: meglio non coprire il modello
+  // velo leggero dietro la firma: resta leggibile su qualsiasi vista
+  if (sfondo !== 'trasparente') {
+    const pad = Math.round(7 * scala);
+    ctx.fillStyle = chiaro ? 'rgba(255, 255, 255, 0.78)' : 'rgba(18, 20, 26, 0.62)';
+    riquadroTondo(ctx, x - pad, y - pad, larghezza + pad * 2, altezza + pad * 2, Math.round(6 * scala));
+    ctx.fill();
+  }
+  if (logo) {
+    ctx.save();
+    riquadroTondo(ctx, x, y + (altezza - lato) / 2, lato, lato, Math.round(5 * scala));
+    ctx.clip();
+    ctx.drawImage(logo, x, y + (altezza - lato) / 2, lato, lato);
+    ctx.restore();
+  }
+  const xt = x + (logo ? lato + spazio : 0);
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = colNome;
+  ctx.font = `600 ${dimNome}px system-ui, Segoe UI, sans-serif`;
+  ctx.fillText(MARCHIO.nome, xt, y);
+  ctx.fillStyle = colRiga;
+  ctx.font = `${dimRiga}px system-ui, Segoe UI, sans-serif`;
+  ctx.fillText(riga, xt, y + dimNome + Math.round(4 * scala));
+}
+
+function riquadroTondo(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
 
 /** Posiziona a schermo l'etichetta della misura e il suggerimento al passaggio. */
@@ -1196,7 +1280,7 @@ function collegaEsportazioni() {
     log(`Esportato ${nome} (${kb(dim)}).`, 'ok');
   };
   const png = async (opts, suffisso) => {
-    const url = await conEtichettaMisura(renderer.screenshot(camera, opts));
+    const url = await componiImmagine(renderer.screenshot(camera, opts), opts.sfondo);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${base()}${suffisso}.png`;
@@ -1230,7 +1314,7 @@ function collegaEsportazioni() {
       // la finestra va aperta subito nel gestore del clic, altrimenti il browser la blocca
       const w = window.open('', '_blank');
       if (!w) return log('Il browser ha bloccato la finestra del report: consenti i pop-up per questo file.', 'attenzione');
-      const immagine = await conEtichettaMisura(renderer.screenshot(camera, { larghezza: 1600, sfondo: 'bianco' }));
+      const immagine = await componiImmagine(renderer.screenshot(camera, { larghezza: 1600, sfondo: 'bianco' }), 'bianco', { firma: false });
       const html = reportHTML(stato.model, immagine, { nomeFile: base() + (stato.nomeFile.match(/\.[^.]+$/) || [''])[0], misura: testoMisura() });
       w.document.open();
       w.document.write(html);
@@ -1268,6 +1352,7 @@ function loop() {
 }
 
 export function avvia() {
+  applicaMarchio(); // prima di tutto: il marchio si vede anche se WebGL manca
   const canvas = $('#vista');
   try {
     renderer = new Renderer(canvas);
